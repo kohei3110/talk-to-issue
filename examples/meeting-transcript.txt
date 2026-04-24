@@ -1,0 +1,41 @@
+== Weekly Engineering Sync – April 21, 2026 ==
+
+Participants: Alice (Tech Lead), Bob (Backend), Carol (Frontend), Dave (SRE)
+
+Alice: Let's start with the API review. Bob, how's the user endpoint?
+
+Bob: The GET /api/users endpoint is working, but we don't have pagination yet. Right now it returns all users in one response, which will be a problem once we hit a few thousand records.
+
+Alice: That needs to be fixed before launch. Can you add offset-based pagination with limit and offset query parameters?
+
+Bob: Sure, I'll handle that. Default limit should probably be 20, max 100.
+
+Alice: Agreed. Carol, anything on the frontend side?
+
+Carol: The login page doesn't show any error message when authentication fails. Users just see the form reset with no feedback. We need to display a proper error message like "Invalid email or password."
+
+Alice: Good catch. That's a UX issue we should fix soon.
+
+Carol: Also, the dashboard page is missing a loading spinner. When data takes a while to fetch, users see a blank page for a few seconds.
+
+Alice: Let's add a spinner component there. Dave, how about infrastructure?
+
+Dave: We need to add a health check endpoint at GET /health. The load balancer needs it for routing, and right now we don't have one. It should return 200 OK with a simple JSON body like {"status": "healthy"}.
+
+Alice: Makes sense. Anything else?
+
+Dave: We should also set up a CI pipeline with GitHub Actions. At minimum, we need it to run mvn test on every pull request to the main branch.
+
+Alice: Absolutely. Let's get that done this sprint. Anything else from anyone?
+
+Bob: One more thing — the README doesn't have API documentation. We should add a section listing all available endpoints with their request/response formats.
+
+Alice: Good point. Let's wrap up. To summarize the action items:
+1. Add pagination to GET /api/users
+2. Show error message on login failure
+3. Add loading spinner to dashboard
+4. Add GET /health endpoint
+5. Set up GitHub Actions CI pipeline
+6. Add API documentation to README
+
+Thanks everyone. Let's aim to close these out by end of sprint.
