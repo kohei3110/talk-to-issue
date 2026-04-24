@@ -13,7 +13,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.Callable;
-import com.github.talktoissue.HealthServer;
 
 @Command(
     name = "talk-to-issue",
@@ -49,11 +48,6 @@ public class App implements Callable<Integer> {
 
     @Override
     public Integer call() throws Exception {
-        // Start health check server
-        HealthServer healthServer = new HealthServer(healthPort);
-        healthServer.start();
-        System.out.println("Health check server started on port " + healthPort);
-
         // Validate inputs
         if (!Files.exists(transcriptFile)) {
             System.err.println("Error: Transcript file not found: " + transcriptFile);
