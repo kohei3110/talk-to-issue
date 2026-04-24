@@ -69,6 +69,60 @@ src/main/java/com/github/talktoissue/
     └── CreatePullRequestTool.java    # Custom tool: create GitHub PR
 ```
 
+## API Documentation
+
+### 1. Create GitHub Issue
+- **Endpoint:** Internal Copilot Tool: `create_issue`
+- **Description:** Create a new GitHub issue in the target repository. Used to file action items, tasks, or decisions extracted from the meeting transcript.
+- **Request:**
+  - `title` (string): Issue title — concise summary of the action item or task
+  - `body` (string): Issue body in Markdown. Include context: who is responsible, what needs to be done, deadline if mentioned, and relevant discussion from the transcript
+  - `labels` (array of string): Labels to apply (must exist in the repository)
+  - `assignees` (array of string): GitHub usernames to assign
+- **Response:**
+  - `number` (int): Issue number
+  - `title` (string): Issue title
+  - `url` (string): Issue URL
+
+### 2. List Labels
+- **Endpoint:** Internal Copilot Tool: `list_labels`
+- **Description:** List all available labels in the target GitHub repository. Use this to choose appropriate labels when creating issues.
+- **Request:** _(none)_
+- **Response:**
+  - Array of objects with:
+    - `name` (string): Label name
+    - `description` (string): Label description
+    - `color` (string): Label color (hex)
+
+### 3. Create Branch
+- **Endpoint:** Internal Copilot Tool: `create_branch`
+- **Description:** Create a new git branch for the given issue number and switch to it. Branch name follows the pattern 'issue-{number}'.
+- **Request:**
+  - `issue_number` (int): The GitHub issue number to create a branch for
+- **Response:**
+  - `status` (string): Status message
+
+### 4. Commit and Push
+- **Endpoint:** Internal Copilot Tool: `commit_and_push`
+- **Description:** Stage all changes, commit with the given message, and push to the remote origin. Call this after making code changes to persist them.
+- **Request:**
+  - `message` (string): Git commit message describing the changes
+- **Response:**
+  - `status` (string): Status message
+  - `message` (string): Commit message
+
+### 5. Create Pull Request
+- **Endpoint:** Internal Copilot Tool: `create_pull_request`
+- **Description:** Create a pull request on GitHub from the current branch to main. Automatically links to the related issue by appending 'Closes #issue_number' to the body.
+- **Request:**
+  - `title` (string): Pull request title
+  - `body` (string): Pull request body in Markdown describing the changes
+  - `issue_number` (int): The GitHub issue number this PR resolves
+- **Response:**
+  - `number` (int): PR number
+  - `title` (string): PR title
+  - `url` (string): PR URL
+
 ## License
 
 MIT
