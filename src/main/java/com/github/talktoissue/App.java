@@ -22,9 +22,17 @@ import java.util.concurrent.Callable;
 )
 public class App implements Callable<Integer> {
 
-    @Option(names = {"-f", "--file"}, required = true,
+    @Option(names = {"-f", "--file"},
             description = "Path to the meeting transcript file")
     private Path transcriptFile;
+
+    @Option(names = {"-q", "--workiq-query"},
+            description = "Natural language query to fetch meeting transcript from Work IQ (e.g., 'yesterday\'s Weekly Sync')")
+    private String workiqQuery;
+
+    @Option(names = {"--tenant-id"},
+            description = "Microsoft Entra tenant ID for Work IQ authentication")
+    private String tenantId;
 
     @Option(names = {"-r", "--repo"}, required = true,
             description = "Target GitHub repository (owner/repo format)")
@@ -48,8 +56,18 @@ public class App implements Callable<Integer> {
 
     @Override
     public Integer call() throws Exception {
-        // Validate inputs
-        if (!Files.exists(transcriptFile)) {
+        // Validate input source: exactly one of --file or --workiq-query must be specified
+        if (transcriptFile == null && workiqQuery == null) {
+            System.err.println("Error: Either --file or --workiq-query must be specified.");
+            System.err.println("  --file (-f)         Path to a meeting transcript file");
+            System.err.println("  --workiq-query (-q) Natural language query to fetch from Work IQ");
+            return 1;
+        }
+        if (transcriptFile != null && workiqQuery != null) {
+            System.err.println("Error: --file and --workiq-query are mutually exclusive. Specify only one.");
+            return 1;
+        }
+        if (transcriptFile != null && !Files.exists(transcriptFile)) {
             System.err.println("Error: Transcript file not found: " + transcriptFile);
             return 1;
         }
@@ -65,9 +83,14 @@ public class App implements Callable<Integer> {
             return 1;
         }
 
-        // Read transcript
-        String transcript = Files.readString(transcriptFile);
-        System.out.println("Loaded transcript: " + transcriptFile + " (" + transcript.length() + " chars)");
+        // Obtain transcript from file or Work IQ
+        String transcript;
+        if (transcriptFile != null) {
+            transcript = Files.readString(transcriptFile);
+            System.out.println("Loaded transcript from file: " + transcriptFile + " (" + transcript.length() + " chars)");
+        } else {
+            transcript = null; // will be fetched via Work IQ after CopilotClient starts
+        }
 
         // Connect to GitHub
         GitHub gitHub = new GitHubBuilder().withOAuthToken(token).build();
@@ -82,10 +105,22 @@ public class App implements Callable<Integer> {
             client.start().get();
             System.out.println("Copilot SDK started.");
 
+            // Fetch transcript from Work IQ if needed
+            String resolvedTranscript;
+            if (transcript != null) {
+                resolvedTranscript = transcript;
+            } else {
+                System.out.println("\n=== Fetching transcript from Work IQ ===");
+                System.out.println("Query: " + workiqQuery);
+                var fetchSession = new TranscriptFetchSession(client, model, tenantId);
+                resolvedTranscript = fetchSession.run(workiqQuery);
+                System.out.println("Transcript fetched from Work IQ (" + resolvedTranscript.length() + " chars)");
+            }
+
             // Phase 1: Create issues from transcript
             System.out.println("\n=== Phase 1: Analyzing transcript and creating issues ===");
             var issueSession = new IssueCreationSession(client, model, repository, dryRun);
-            List<CreateIssueTool.CreatedIssue> createdIssues = issueSession.run(transcript);
+            List<CreateIssueTool.CreatedIssue> createdIssues = issueSession.run(resolvedTranscript);
 
             System.out.println("\n--- Created " + createdIssues.size() + " issue(s) ---");
             for (var issue : createdIssues) {
