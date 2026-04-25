@@ -1,44 +1,36 @@
 package com.github.talktoissue;
 
-import com.github.copilot.sdk.CopilotClient;
-import com.github.talktoissue.tools.CreateIssueTool;
-import org.kohsuke.github.GitHub;
-import org.kohsuke.github.GitHubBuilder;
+import com.github.talktoissue.commands.CompileCommand;
+import com.github.talktoissue.commands.DriftCommand;
+import com.github.talktoissue.commands.PipelineCommand;
+import com.github.talktoissue.commands.RunCommand;
+import com.github.talktoissue.commands.ScoreCommand;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
 import java.io.File;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.List;
-import java.util.concurrent.Callable;
 
 @Command(
     name = "talk-to-issue",
     mixinStandardHelpOptions = true,
     version = "1.0",
-    description = "Analyze meeting transcripts, create GitHub issues, implement solutions, and open PRs — all automatically."
+    description = "Analyze meeting transcripts, create GitHub issues, implement solutions, and open PRs — all automatically.",
+    subcommands = {
+        RunCommand.class,
+        CompileCommand.class,
+        ScoreCommand.class,
+        DriftCommand.class,
+        PipelineCommand.class
+    }
 )
-public class App implements Callable<Integer> {
-
-    @Option(names = {"-f", "--file"},
-            description = "Path to the meeting transcript file")
-    private Path transcriptFile;
-
-    @Option(names = {"-q", "--workiq-query"},
-            description = "Natural language query to fetch meeting transcript from Work IQ (e.g., 'yesterday\'s Weekly Sync')")
-    private String workiqQuery;
-
-    @Option(names = {"--tenant-id"},
-            description = "Microsoft Entra tenant ID for Work IQ authentication")
-    private String tenantId;
+public class App implements Runnable {
 
     @Option(names = {"-r", "--repo"}, required = true,
             description = "Target GitHub repository (owner/repo format)")
     private String repoFullName;
 
-    @Option(names = {"-w", "--working-dir"}, required = true,
+    @Option(names = {"-w", "--working-dir"},
             description = "Path to the local clone of the target repository")
     private File workingDir;
 
@@ -50,140 +42,27 @@ public class App implements Callable<Integer> {
             description = "Simulate without creating issues or PRs")
     private boolean dryRun;
 
-    @Option(names = {"--health-port"}, defaultValue = "8080",
-        description = "Port for the health check HTTP server (default: 8080)")
-    private int healthPort;
-
-    @Override
-    public Integer call() throws Exception {
-        // Validate input source: exactly one of --file or --workiq-query must be specified
-        if (transcriptFile == null && workiqQuery == null) {
-            System.err.println("Error: Either --file or --workiq-query must be specified.");
-            System.err.println("  --file (-f)         Path to a meeting transcript file");
-            System.err.println("  --workiq-query (-q) Natural language query to fetch from Work IQ");
-            return 1;
-        }
-        if (transcriptFile != null && workiqQuery != null) {
-            System.err.println("Error: --file and --workiq-query are mutually exclusive. Specify only one.");
-            return 1;
-        }
-        if (transcriptFile != null && !Files.exists(transcriptFile)) {
-            System.err.println("Error: Transcript file not found: " + transcriptFile);
-            return 1;
-        }
-        if (!workingDir.isDirectory()) {
-            System.err.println("Error: Working directory not found: " + workingDir);
-            return 1;
-        }
-
-        String token = System.getenv("GITHUB_TOKEN");
-        if (token == null || token.isBlank()) {
-            System.err.println("Error: GITHUB_TOKEN environment variable is not set.");
-            System.err.println("Set it with: export GITHUB_TOKEN=ghp_your_token_here");
-            return 1;
-        }
-
-        // Obtain transcript from file or Work IQ
-        String transcript;
-        if (transcriptFile != null) {
-            transcript = Files.readString(transcriptFile);
-            System.out.println("Loaded transcript from file: " + transcriptFile + " (" + transcript.length() + " chars)");
-        } else {
-            transcript = null; // will be fetched via Work IQ after CopilotClient starts
-        }
-
-        // Connect to GitHub
-        GitHub gitHub = new GitHubBuilder().withOAuthToken(token).build();
-        var repository = gitHub.getRepository(repoFullName);
-        System.out.println("Connected to repository: " + repository.getFullName());
-
-        if (dryRun) {
-            System.out.println("=== DRY-RUN MODE ===");
-        }
-
-        try (var client = new CopilotClient()) {
-            client.start().get();
-            System.out.println("Copilot SDK started.");
-
-            // Fetch transcript from Work IQ if needed
-            String resolvedTranscript;
-            if (transcript != null) {
-                resolvedTranscript = transcript;
-            } else {
-                System.out.println("\n=== Fetching transcript from Work IQ ===");
-                System.out.println("Query: " + workiqQuery);
-                var fetchSession = new TranscriptFetchSession(client, model, tenantId);
-                resolvedTranscript = fetchSession.run(workiqQuery);
-                System.out.println("Transcript fetched from Work IQ (" + resolvedTranscript.length() + " chars)");
-            }
-
-            // Phase 1: Create issues from transcript
-            System.out.println("\n=== Phase 1: Analyzing transcript and creating issues ===");
-            var issueSession = new IssueCreationSession(client, model, repository, dryRun);
-            List<CreateIssueTool.CreatedIssue> createdIssues = issueSession.run(resolvedTranscript);
-
-            System.out.println("\n--- Created " + createdIssues.size() + " issue(s) ---");
-            for (var issue : createdIssues) {
-                System.out.println("  #" + issue.number() + ": " + issue.title());
-            }
-
-            if (createdIssues.isEmpty()) {
-                System.out.println("No issues created. Nothing to implement.");
-                return 0;
-            }
-
-            // Phase 2: Implement each issue and create PRs
-            System.out.println("\n=== Phase 2: Implementing issues and creating PRs ===");
-            int successCount = 0;
-            int failCount = 0;
-
-            for (var issue : createdIssues) {
-                System.out.println("\n--- Implementing Issue #" + issue.number() + ": " + issue.title() + " ---");
-
-                try {
-                    // Reset to main branch before each implementation
-                    resetToMain();
-
-                    // Fetch issue body from GitHub (or use dry-run placeholder)
-                    String issueBody;
-                    if (dryRun) {
-                        issueBody = "Dry-run issue body for: " + issue.title();
-                    } else {
-                        var ghIssue = repository.getIssue(issue.number());
-                        issueBody = ghIssue.getBody() != null ? ghIssue.getBody() : issue.title();
-                    }
-
-                    var implSession = new ImplementationSession(client, model, repository, workingDir, dryRun);
-                    implSession.run(issue.number(), issue.title(), issueBody);
-
-                    successCount++;
-                    System.out.println("  ✓ Issue #" + issue.number() + " implemented successfully.");
-                } catch (Exception e) {
-                    failCount++;
-                    System.err.println("  ✗ Failed to implement Issue #" + issue.number() + ": " + e.getMessage());
-                }
-            }
-
-            // Summary
-            System.out.println("\n=== Summary ===");
-            System.out.println("Issues created: " + createdIssues.size());
-            System.out.println("Implementations succeeded: " + successCount);
-            System.out.println("Implementations failed: " + failCount);
-        }
-
-        return 0;
+    public String getRepoFullName() {
+        return repoFullName;
     }
 
-    private void resetToMain() throws Exception {
-        var process = new ProcessBuilder("git", "checkout", "main")
-            .directory(workingDir)
-            .redirectErrorStream(true)
-            .start();
-        process.getInputStream().readAllBytes();
-        int exitCode = process.waitFor();
-        if (exitCode != 0) {
-            throw new RuntimeException("Failed to checkout main branch");
-        }
+    public File getWorkingDir() {
+        return workingDir;
+    }
+
+    public String getModel() {
+        return model;
+    }
+
+    public boolean isDryRun() {
+        return dryRun;
+    }
+
+    @Override
+    public void run() {
+        System.err.println("Please specify a subcommand: run, compile, score, drift, or pipeline.");
+        System.err.println("Use --help for usage information.");
+        new CommandLine(this).usage(System.err);
     }
 
     public static void main(String[] args) {
