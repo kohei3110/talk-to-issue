@@ -4,6 +4,11 @@ import com.github.copilot.sdk.CopilotClient;
 import com.github.talktoissue.App;
 import com.github.talktoissue.IssueCompilerSession;
 import com.github.talktoissue.TranscriptFetchSession;
+import com.github.talktoissue.context.ContextAggregator;
+import com.github.talktoissue.context.ContextConfig;
+import com.github.talktoissue.context.ContextSource;
+import com.github.talktoissue.context.FileContextSource;
+import com.github.talktoissue.context.WorkIQContextSource;
 import com.github.talktoissue.tools.CreateIssueTool;
 import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GitHubBuilder;
@@ -14,12 +19,13 @@ import picocli.CommandLine.ParentCommand;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
 
 @Command(
     name = "compile",
-    description = "Compile meeting transcript into coding-agent-ready GitHub issues with structured templates and codebase context."
+    description = "Compile context (transcripts, docs, issues, etc.) into coding-agent-ready GitHub issues."
 )
 public class CompileCommand implements Callable<Integer> {
 
@@ -27,21 +33,36 @@ public class CompileCommand implements Callable<Integer> {
     private App parent;
 
     @Option(names = {"-f", "--file"},
-            description = "Path to the meeting transcript file")
+            description = "Path to a context file (transcript, document, etc.)")
     private Path transcriptFile;
 
     @Option(names = {"-q", "--workiq-query"},
-            description = "Natural language query to fetch meeting transcript from Work IQ")
+            description = "Natural language query to fetch context from Work IQ")
     private String workiqQuery;
 
     @Option(names = {"--tenant-id"},
             description = "Microsoft Entra tenant ID for Work IQ authentication")
     private String tenantId;
 
+    @Option(names = {"--context-config"},
+            description = "Path to a YAML file defining multiple context sources")
+    private Path contextConfig;
+
+    @Option(names = {"--context"}, split = ",",
+            description = "Inline context source(s): file:<path>, workiq:<query>, github:issues, github:prs")
+    private List<String> contextSpecs;
+
     @Override
     public Integer call() throws Exception {
-        if (transcriptFile == null && workiqQuery == null) {
-            System.err.println("Error: Either --file or --workiq-query must be specified.");
+        boolean hasLegacy = transcriptFile != null || workiqQuery != null;
+        boolean hasNew = contextConfig != null || (contextSpecs != null && !contextSpecs.isEmpty());
+
+        if (!hasLegacy && !hasNew) {
+            System.err.println("Error: Specify context via --file, --workiq-query, --context-config, or --context.");
+            return 1;
+        }
+        if (hasLegacy && hasNew) {
+            System.err.println("Error: Cannot mix legacy options (--file/--workiq-query) with --context-config/--context.");
             return 1;
         }
         if (transcriptFile != null && workiqQuery != null) {
@@ -49,7 +70,7 @@ public class CompileCommand implements Callable<Integer> {
             return 1;
         }
         if (transcriptFile != null && !Files.exists(transcriptFile)) {
-            System.err.println("Error: Transcript file not found: " + transcriptFile);
+            System.err.println("Error: File not found: " + transcriptFile);
             return 1;
         }
 
@@ -64,8 +85,6 @@ public class CompileCommand implements Callable<Integer> {
             System.err.println("Error: --working-dir is required for the compile command.");
             return 1;
         }
-
-        String transcript = transcriptFile != null ? Files.readString(transcriptFile) : null;
 
         GitHub gitHub = new GitHubBuilder().withOAuthToken(token).build();
         var repository = gitHub.getRepository(parent.getRepoFullName());
@@ -82,19 +101,30 @@ public class CompileCommand implements Callable<Integer> {
             client.start().get();
             System.out.println("Copilot SDK started.");
 
-            String resolvedTranscript;
-            if (transcript != null) {
-                resolvedTranscript = transcript;
+            String resolvedContext;
+
+            if (hasNew) {
+                // New context system
+                List<ContextSource> sources;
+                if (contextConfig != null) {
+                    sources = ContextConfig.load(contextConfig, client, model, repository);
+                } else {
+                    sources = parseInlineContextSpecs(contextSpecs, client, model, repository);
+                }
+                System.out.println("\n=== Aggregating " + sources.size() + " context source(s) ===");
+                resolvedContext = new ContextAggregator(sources).aggregate();
+            } else if (transcriptFile != null) {
+                resolvedContext = Files.readString(transcriptFile);
             } else {
-                System.out.println("\n=== Fetching transcript from Work IQ ===");
+                System.out.println("\n=== Fetching context from Work IQ ===");
                 var fetchSession = new TranscriptFetchSession(client, model, tenantId);
-                resolvedTranscript = fetchSession.run(workiqQuery);
-                System.out.println("Transcript fetched (" + resolvedTranscript.length() + " chars)");
+                resolvedContext = fetchSession.run(workiqQuery);
+                System.out.println("Context fetched (" + resolvedContext.length() + " chars)");
             }
 
-            System.out.println("\n=== Compiling transcript into coding-agent-ready issues ===");
+            System.out.println("\n=== Compiling context into coding-agent-ready issues ===");
             var compilerSession = new IssueCompilerSession(client, model, repository, workingDir, dryRun);
-            List<CreateIssueTool.CreatedIssue> createdIssues = compilerSession.run(resolvedTranscript);
+            List<CreateIssueTool.CreatedIssue> createdIssues = compilerSession.run(resolvedContext);
 
             System.out.println("\n=== Results ===");
             System.out.println("Created " + createdIssues.size() + " coding-agent-ready issue(s):");
@@ -107,5 +137,28 @@ public class CompileCommand implements Callable<Integer> {
         }
 
         return 0;
+    }
+
+    static List<ContextSource> parseInlineContextSpecs(List<String> specs, CopilotClient client,
+                                                        String model,
+                                                        org.kohsuke.github.GHRepository repository) {
+        var sources = new ArrayList<ContextSource>();
+        for (var spec : specs) {
+            if (spec.startsWith("file:")) {
+                sources.add(new FileContextSource(Path.of(spec.substring(5))));
+            } else if (spec.startsWith("workiq:")) {
+                sources.add(new WorkIQContextSource(spec.substring(7), null));
+            } else if (spec.equals("github:issues")) {
+                sources.add(new com.github.talktoissue.context.GitHubContextSource(
+                    repository, com.github.talktoissue.context.GitHubContextSource.Scope.ISSUES, null));
+            } else if (spec.equals("github:prs")) {
+                sources.add(new com.github.talktoissue.context.GitHubContextSource(
+                    repository, com.github.talktoissue.context.GitHubContextSource.Scope.PULL_REQUESTS, null));
+            } else {
+                throw new IllegalArgumentException("Unknown context spec: " + spec
+                    + ". Supported: file:<path>, workiq:<query>, github:issues, github:prs");
+            }
+        }
+        return sources;
     }
 }

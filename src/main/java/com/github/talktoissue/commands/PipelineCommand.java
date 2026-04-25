@@ -7,6 +7,9 @@ import com.github.talktoissue.IssueQualityScorerSession;
 import com.github.talktoissue.ImplementationSession;
 import com.github.talktoissue.IntentDriftDetectorSession;
 import com.github.talktoissue.TranscriptFetchSession;
+import com.github.talktoissue.context.ContextAggregator;
+import com.github.talktoissue.context.ContextConfig;
+import com.github.talktoissue.context.ContextSource;
 import com.github.talktoissue.tools.CreateIssueTool;
 import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GitHubBuilder;
@@ -31,11 +34,11 @@ public class PipelineCommand implements Callable<Integer> {
     private App parent;
 
     @Option(names = {"-f", "--file"},
-            description = "Path to the meeting transcript file")
+            description = "Path to a context file (transcript, document, etc.)")
     private Path transcriptFile;
 
     @Option(names = {"-q", "--workiq-query"},
-            description = "Natural language query to fetch meeting transcript from Work IQ")
+            description = "Natural language query to fetch context from Work IQ")
     private String workiqQuery;
 
     @Option(names = {"--tenant-id"},
@@ -46,10 +49,25 @@ public class PipelineCommand implements Callable<Integer> {
             description = "Minimum quality score to proceed with implementation. Default: ${DEFAULT-VALUE}")
     private int minScore;
 
+    @Option(names = {"--context-config"},
+            description = "Path to a YAML file defining multiple context sources")
+    private Path contextConfig;
+
+    @Option(names = {"--context"}, split = ",",
+            description = "Inline context source(s): file:<path>, workiq:<query>, github:issues, github:prs")
+    private List<String> contextSpecs;
+
     @Override
     public Integer call() throws Exception {
-        if (transcriptFile == null && workiqQuery == null) {
-            System.err.println("Error: Either --file or --workiq-query must be specified.");
+        boolean hasLegacy = transcriptFile != null || workiqQuery != null;
+        boolean hasNew = contextConfig != null || (contextSpecs != null && !contextSpecs.isEmpty());
+
+        if (!hasLegacy && !hasNew) {
+            System.err.println("Error: Specify context via --file, --workiq-query, --context-config, or --context.");
+            return 1;
+        }
+        if (hasLegacy && hasNew) {
+            System.err.println("Error: Cannot mix legacy options (--file/--workiq-query) with --context-config/--context.");
             return 1;
         }
         if (transcriptFile != null && workiqQuery != null) {
@@ -57,7 +75,7 @@ public class PipelineCommand implements Callable<Integer> {
             return 1;
         }
         if (transcriptFile != null && !Files.exists(transcriptFile)) {
-            System.err.println("Error: Transcript file not found: " + transcriptFile);
+            System.err.println("Error: File not found: " + transcriptFile);
             return 1;
         }
 
@@ -90,21 +108,30 @@ public class PipelineCommand implements Callable<Integer> {
             client.start().get();
             System.out.println("Copilot SDK started.");
 
-            // Step 0: Resolve transcript
-            String resolvedTranscript;
-            if (transcript != null) {
-                resolvedTranscript = transcript;
+            // Step 0: Resolve context
+            String resolvedContext;
+            if (hasNew) {
+                List<ContextSource> sources;
+                if (contextConfig != null) {
+                    sources = ContextConfig.load(contextConfig, client, model, repository);
+                } else {
+                    sources = CompileCommand.parseInlineContextSpecs(contextSpecs, client, model, repository);
+                }
+                System.out.println("\n=== Step 0: Aggregating " + sources.size() + " context source(s) ===");
+                resolvedContext = new ContextAggregator(sources).aggregate();
+            } else if (transcript != null) {
+                resolvedContext = transcript;
             } else {
-                System.out.println("\n=== Step 0: Fetching transcript from Work IQ ===");
+                System.out.println("\n=== Step 0: Fetching context from Work IQ ===");
                 var fetchSession = new TranscriptFetchSession(client, model, tenantId);
-                resolvedTranscript = fetchSession.run(workiqQuery);
-                System.out.println("Transcript fetched (" + resolvedTranscript.length() + " chars)");
+                resolvedContext = fetchSession.run(workiqQuery);
+                System.out.println("Context fetched (" + resolvedContext.length() + " chars)");
             }
 
             // Step 1: Compile transcript into issues
             System.out.println("\n=== Step 1: Compiling transcript into coding-agent-ready issues ===");
             var compilerSession = new IssueCompilerSession(client, model, repository, workingDir, dryRun);
-            List<CreateIssueTool.CreatedIssue> createdIssues = compilerSession.run(resolvedTranscript);
+            List<CreateIssueTool.CreatedIssue> createdIssues = compilerSession.run(resolvedContext);
 
             System.out.println("Created " + createdIssues.size() + " issue(s)");
             if (createdIssues.isEmpty()) {
@@ -193,7 +220,7 @@ public class PipelineCommand implements Callable<Integer> {
 
                         int prNum = prs.get(0).getNumber();
                         var driftSession = new IntentDriftDetectorSession(client, model, repository, workingDir);
-                        var report = driftSession.run(prNum, impl.issue().number(), resolvedTranscript);
+                        var report = driftSession.run(prNum, impl.issue().number(), resolvedContext);
 
                         String icon = switch (report.verdict()) {
                             case "pass" -> "✓";

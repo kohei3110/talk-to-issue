@@ -10,7 +10,10 @@ import com.github.copilot.sdk.json.SessionConfig;
 import com.github.copilot.sdk.json.SystemMessageConfig;
 import com.github.copilot.sdk.SystemMessageMode;
 import com.github.talktoissue.tools.CreateIssueTool;
+import com.github.talktoissue.tools.ListDirectoryTool;
 import com.github.talktoissue.tools.ListLabelsTool;
+import com.github.talktoissue.tools.ReadFileTool;
+import com.github.talktoissue.tools.SearchCodeTool;
 import org.kohsuke.github.GHRepository;
 
 import java.io.File;
@@ -22,10 +25,12 @@ public class IssueCompilerSession {
     private static final String SYSTEM_PROMPT = """
         <rules>
         You are a coding-agent-ready issue compiler. Your job is to:
-        1. Read the meeting transcript provided by the user.
+        1. Read the context provided by the user. It may be a meeting transcript, design document,
+           bug report, customer feedback, email thread, or any other source of action items.
         2. Extract all action items, tasks, decisions, and follow-ups.
-        3. For each item, explore the codebase using built-in tools (read_file, list_dir, search_code)
+        3. For each item, explore the codebase using custom tools (`read_file`, `list_dir`, `search_code`)
            to gather technical context — related files, existing patterns, dependencies, and conventions.
+           Do NOT use built-in filesystem tools (glob, view, grep). Use the custom tools instead.
         4. Use the `list_labels` tool to see available labels.
         5. Use the `create_issue` tool to create a structured, coding-agent-ready GitHub issue for each item.
 
@@ -57,7 +62,7 @@ public class IssueCompilerSession {
         - ALWAYS explore the codebase before creating issues to provide accurate technical context.
         - Create separate issues for each distinct action item — do NOT combine multiple tasks.
         - Skip discussion points without a clear action or deliverable.
-        - Match the transcript language (e.g., Japanese transcript → Japanese issue).
+        - Match the context language (e.g., Japanese context → Japanese issue).
         - Apply labels that match the task nature (bug, enhancement, documentation, etc.).
         - The issue title should be concise and actionable.
         - Acceptance criteria must be specific and verifiable — avoid vague criteria like "works correctly".
@@ -80,16 +85,25 @@ public class IssueCompilerSession {
         this.dryRun = dryRun;
     }
 
-    public List<CreateIssueTool.CreatedIssue> run(String transcript) throws Exception {
+    public List<CreateIssueTool.CreatedIssue> run(String context) throws Exception {
         var createIssueTool = new CreateIssueTool(repository, dryRun);
         var listLabelsTool = new ListLabelsTool(repository);
+        var readFileTool = new ReadFileTool(workingDir);
+        var listDirTool = new ListDirectoryTool(workingDir);
+        var searchCodeTool = new SearchCodeTool(workingDir);
 
         var session = client.createSession(
             new SessionConfig()
                 .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
                 .setModel(model)
                 .setWorkingDirectory(workingDir.getAbsolutePath())
-                .setTools(List.of(createIssueTool.build(), listLabelsTool.build()))
+                .setTools(List.of(
+                    createIssueTool.build(),
+                    listLabelsTool.build(),
+                    readFileTool.build(),
+                    listDirTool.build(),
+                    searchCodeTool.build()
+                ))
                 .setSystemMessage(new SystemMessageConfig()
                     .setMode(SystemMessageMode.APPEND)
                     .setContent(SYSTEM_PROMPT))
@@ -105,20 +119,18 @@ public class IssueCompilerSession {
             done.complete(null));
 
         String prompt = """
-            以下の会議トランスクリプトを解析し、アクションアイテム・タスク・決定事項を抽出してください。
+            以下のコンテキストを解析し、アクションアイテム・タスク・決定事項を抽出してください。
             各アイテムについて、まずコードベースを調査して技術コンテキストを把握した上で、
             coding-agent-ready な構造化 Issue を作成してください。
 
             手順:
             1. list_labels でリポジトリの既存ラベルを確認
-            2. トランスクリプトからアクションアイテムを抽出
+            2. コンテキストからアクションアイテムを抽出
             3. 各アイテムについて read_file, list_dir, search_code でコードベースを調査
             4. 調査結果を踏まえて create_issue で構造化 Issue を作成
 
-            <transcript>
             %s
-            </transcript>
-            """.formatted(transcript);
+            """.formatted(context);
 
         session.send(new MessageOptions().setPrompt(prompt)).get();
         done.get();

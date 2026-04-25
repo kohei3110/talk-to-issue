@@ -1,0 +1,45 @@
+# Context Configuration Examples for talk-to-issue
+#
+# This file demonstrates how to define multiple context sources
+# that are aggregated and analyzed to create GitHub Issues.
+
+# Example 1: Single file context (simplest)
+# sources:
+#   - type: file
+#     path: ./examples/meeting-transcript.txt
+
+# Example 2: Multiple file sources
+# sources:
+#   - type: file
+#     path: ./examples/meeting-transcript.txt
+#   - type: file
+#     path: ./examples/incident-report.txt
+
+# Example 3: GitHub Issues as context (e.g., triage open issues)
+# sources:
+#   - type: github
+#     scope: issues
+#     filter: "label:needs-triage"
+
+# Example 4: Work IQ (Microsoft 365 meeting transcripts)
+# sources:
+#   - type: workiq
+#     query: "直近1週間の会議を要約して"
+#     tenant-id: "your-tenant-id"
+
+# Example 5: MCP server integration
+# sources:
+#   - type: mcp
+#     server: filesystem
+#     command: npx
+#     args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/docs"]
+#     query: "Read the requirements document"
+
+# ──────────────────────────────────────────────
+# Active configuration: meeting transcript + incident report
+# ──────────────────────────────────────────────
+sources:
+  - type: file
+    path: ./examples/meeting-transcript.txt
+  - type: file
+    path: ./examples/incident-report.txt

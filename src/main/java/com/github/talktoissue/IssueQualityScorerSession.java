@@ -10,7 +10,10 @@ import com.github.copilot.sdk.json.SessionConfig;
 import com.github.copilot.sdk.json.SystemMessageConfig;
 import com.github.copilot.sdk.SystemMessageMode;
 import com.github.talktoissue.tools.GetIssueTool;
+import com.github.talktoissue.tools.ListDirectoryTool;
+import com.github.talktoissue.tools.ReadFileTool;
 import com.github.talktoissue.tools.ReportQualityScoreTool;
+import com.github.talktoissue.tools.SearchCodeTool;
 import org.kohsuke.github.GHRepository;
 
 import java.io.File;
@@ -25,8 +28,9 @@ public class IssueQualityScorerSession {
         to be processed by an AI coding agent. Your job is to:
 
         1. Use the `get_issue` tool to fetch the issue details.
-        2. Explore the codebase using built-in tools (read_file, list_dir, search_code) to verify
+        2. Explore the codebase using custom tools (`read_file`, `list_dir`, `search_code`) to verify
            whether the technical context in the issue is accurate and sufficient.
+           Do NOT use built-in filesystem tools (glob, view, grep). Use the custom tools instead.
         3. Evaluate the issue against the 6 quality dimensions defined below.
         4. Use the `report_quality_score` tool to report the assessment.
 
@@ -95,13 +99,22 @@ public class IssueQualityScorerSession {
     public ReportQualityScoreTool.QualityScore run(int issueNumber) throws Exception {
         var getIssueTool = new GetIssueTool(repository);
         var reportScoreTool = new ReportQualityScoreTool();
+        var readFileTool = new ReadFileTool(workingDir);
+        var listDirTool = new ListDirectoryTool(workingDir);
+        var searchCodeTool = new SearchCodeTool(workingDir);
 
         var session = client.createSession(
             new SessionConfig()
                 .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
                 .setModel(model)
                 .setWorkingDirectory(workingDir.getAbsolutePath())
-                .setTools(List.of(getIssueTool.build(), reportScoreTool.build()))
+                .setTools(List.of(
+                    getIssueTool.build(),
+                    reportScoreTool.build(),
+                    readFileTool.build(),
+                    listDirTool.build(),
+                    searchCodeTool.build()
+                ))
                 .setSystemMessage(new SystemMessageConfig()
                     .setMode(SystemMessageMode.APPEND)
                     .setContent(SYSTEM_PROMPT))

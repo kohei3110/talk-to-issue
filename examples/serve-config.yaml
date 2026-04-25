@@ -1,0 +1,10 @@
+# Webhook-driven autonomous mode configuration
+#
+# Used with `serve --context-config` for scheduled polling.
+# The scheduler periodically aggregates these sources and
+# creates Issues for any new action items found.
+
+sources:
+  - type: github
+    scope: issues
+    filter: "label:needs-triage"

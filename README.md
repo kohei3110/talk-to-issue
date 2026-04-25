@@ -1,34 +1,45 @@
 # talk-to-issue
 
-Analyze meeting transcripts, automatically create GitHub Issues, implement the code changes, and open Pull Requests — all powered by the [GitHub Copilot SDK for Java](https://github.github.io/copilot-sdk-java/).
+**あらゆるコンテキスト**（会議録、インシデントレポート、設計書、GitHub Issues など）を解析し、GitHub Issue の作成・実装・PR 作成を自動化するエージェント。[GitHub Copilot SDK for Java](https://github.github.io/copilot-sdk-java/) を使用。
+
+ローカルマシン上で自律的に稼働するサーバーモード（`serve`）を搭載し、GitHub Webhook をトリガーにパイプラインを継続的に実行可能。
 
 ## Features
 
 | Feature | Command | Description |
 |---------|---------|-------------|
-| **Issue Compiler** | `compile` | 会議録をcoding-agent-readyなIssueに変換する。概要・受け入れ基準・技術コンテキスト・スコープ・テスト要件を含む構造化テンプレートで Issue を作成。 |
-| **Issue Quality Scorer** | `score` | IssueがAI coding agentに渡せる品質か採点する（0〜100点）。6軸評価: Clarity(20%), Specificity(20%), Acceptance Criteria(20%), Scope(15%), Testability(15%), Context(10%)。 |
-| **Intent Drift Detector** | `drift` | PRが会議決定・Issue要件からズレていないか検出する。4種のドリフト（scope_creep, missing_requirement, approach_divergence, unrelated_change）を検出し pass/warn/fail で判定。 |
-| **Full Workflow** | `run` | 会議録 → Issue作成 → 実装 → PR作成の一気通貫ワークフロー。 |
-| **Full Pipeline** | `pipeline` | compile → score（品質フィルタ） → implement → drift detection のフルパイプライン。 |
+| **Issue Compiler** | `compile` | 任意のコンテキストを coding-agent-ready な Issue に変換。概要・受け入れ基準・技術コンテキスト・スコープ・テスト要件を含む構造化テンプレート。 |
+| **Issue Quality Scorer** | `score` | Issue が AI coding agent に渡せる品質か採点（0〜100点）。6軸評価。 |
+| **Intent Drift Detector** | `drift` | PR が会議決定・Issue 要件からズレていないか検出。pass/warn/fail で判定。 |
+| **Full Pipeline** | `pipeline` | compile → score → implement → drift detection のフルパイプライン。 |
+| **Autonomous Server** | `serve` | Webhook 受信 + 定期ポーリングで自律稼働するエージェントサーバー。 |
 
-## How it works
+## Architecture
 
 ```
-Meeting Transcript
-       │
-       ▼
+                     ┌─────────────────────────────────────┐
+                     │         Context Sources              │
+                     │  ┌──────┐ ┌──────┐ ┌──────┐ ┌─────┐│
+                     │  │ File │ │WorkIQ│ │GitHub│ │ MCP ││
+                     │  └──┬───┘ └──┬───┘ └──┬───┘ └──┬──┘│
+                     └─────┼────────┼────────┼────────┼───┘
+                           └────────┼────────┘        │
+                                    ▼                 │
+                          ┌─────────────────┐         │
+                          │ContextAggregator│◀────────┘
+                          └────────┬────────┘
+                                   ▼
   ┌─────────┐     ┌─────────┐     ┌──────────────┐     ┌───────────────┐
   │ compile  │────▶│  score  │────▶│  implement   │────▶│    drift      │
-  │ 会議録→  │     │ 品質採点 │     │ Issue→PR     │     │ ズレ検出      │
+  │ Context→ │     │ 品質採点 │     │ Issue→PR     │     │ ズレ検出      │
   │ Issue作成│     │ (0-100) │     │              │     │ pass/warn/fail│
   └─────────┘     └─────────┘     └──────────────┘     └───────────────┘
+        ▲                                                       │
+        │              ┌────────────────────────┐               │
+        └──────────────│  serve (AgentServer)   │◀──────────────┘
+                       │  Webhook + Scheduler   │
+                       └────────────────────────┘
 ```
-
-1. **Issue Compiler** (`compile`): LLMが会議録を分析し、コーディングエージェントが即座に着手できる構造化Issueを作成。コードベースの探索も行い、技術コンテキストを自動付与。
-2. **Issue Quality Scorer** (`score`): 作成されたIssueを6軸で採点。基準未満のIssueはパイプラインから除外可能。
-3. **Implementation** (`run` / `pipeline`): 各Issueに対してブランチ作成 → コード実装 → コミット＆プッシュ → PR作成を自動実行。
-4. **Intent Drift Detector** (`drift`): PRの差分をIssue要件・会議録と照合し、スコープクリープや要件漏れを検出。
 
 ## Prerequisites
 
@@ -59,23 +70,94 @@ All subcommands share the following options, specified **before** the subcommand
 | `-m`, `--model` | No | LLM model (default: `gpt-4.1`) |
 | `--dry-run` | No | Simulate without creating issues/PRs |
 
-### `compile` — 会議録 → Issue作成
+### Context Sources
 
-会議録を解析し、構造化されたGitHub Issueを作成します。
+コンテキストソースは以下の方法で指定できます。すべてのソースの結果は集約されて LLM に渡されます。
+
+#### 1. ファイル指定（従来方式）
 
 ```bash
+compile -f meeting-notes.txt
+```
+
+#### 2. インラインコンテキスト（`--context`）
+
+```bash
+# ファイル
+compile --context file:./examples/meeting-transcript.txt
+
+# 複数ソース（カンマ区切り）
+compile --context file:./examples/meeting-transcript.txt,file:./examples/incident-report.txt
+
+# GitHub Issues
+compile --context github:issues
+
+# GitHub Pull Requests
+compile --context github:prs
+```
+
+#### 3. YAML 設定ファイル（`--context-config`）
+
+```bash
+compile --context-config examples/context-config.yaml
+```
+
+設定ファイル例（[examples/context-config.yaml](examples/context-config.yaml)）：
+
+```yaml
+sources:
+  - type: file
+    path: ./examples/meeting-transcript.txt
+  - type: file
+    path: ./examples/incident-report.txt
+  - type: github
+    scope: issues
+    filter: "label:needs-triage"
+  - type: workiq
+    query: "直近1週間の会議を要約して"
+    tenant-id: "your-tenant-id"
+  - type: mcp
+    server: filesystem
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/docs"]
+    query: "Read the requirements document"
+```
+
+| Source Type | Description | Parameters |
+|-------------|-------------|------------|
+| `file` | ローカルファイル読み込み | `path` |
+| `workiq` | Microsoft 365 会議データ取得 | `query`, `tenant-id` |
+| `github` | GitHub Issues/PRs 取得 | `scope` (`issues`/`pull_requests`), `filter` |
+| `mcp` | 任意の MCP サーバー経由 | `server`, `command`, `args`, `query` |
+
+### `compile` — コンテキスト → Issue 作成
+
+任意のコンテキスト（会議録、インシデントレポート、設計書など）を解析し、構造化 GitHub Issue を作成します。
+
+```bash
+# ファイル指定
 java -jar target/talk-to-issue-1.0-SNAPSHOT.jar \
   -r owner/repo -w /path/to/clone --dry-run \
   compile -f meeting-notes.txt
+
+# YAML設定
+java -jar target/talk-to-issue-1.0-SNAPSHOT.jar \
+  -r owner/repo -w /path/to/clone --dry-run \
+  compile --context-config examples/context-config.yaml
+
+# インライン指定
+java -jar target/talk-to-issue-1.0-SNAPSHOT.jar \
+  -r owner/repo -w /path/to/clone --dry-run \
+  compile --context file:./examples/incident-report.txt
 ```
 
-| Flag | Required | Description |
-|------|----------|-------------|
-| `-f`, `--file` | * | Path to the meeting transcript file |
-| `-q`, `--workiq-query` | * | Natural language query to fetch transcript from Work IQ |
-| `--tenant-id` | No | Microsoft Entra tenant ID for Work IQ |
-
-\* Either `--file` or `--workiq-query` must be specified.
+| Flag | Description |
+|------|-------------|
+| `-f`, `--file` | コンテキストファイルのパス |
+| `-q`, `--workiq-query` | Work IQ からコンテキストを取得するクエリ |
+| `--tenant-id` | Microsoft Entra tenant ID (Work IQ 用) |
+| `--context-config` | YAML 設定ファイルのパス |
+| `--context` | インラインコンテキスト指定（カンマ区切りで複数可） |
 
 ### `score` — Issue品質スコアリング
 
@@ -139,48 +221,230 @@ java -jar target/talk-to-issue-1.0-SNAPSHOT.jar \
 compile → score → implement → drift detection を順次実行します。
 
 ```bash
+# ファイル指定
 java -jar target/talk-to-issue-1.0-SNAPSHOT.jar \
   -r owner/repo -w /path/to/clone --dry-run \
   pipeline -f meeting-notes.txt --min-score 70
+
+# YAML設定（複数ソースを集約してパイプライン実行）
+java -jar target/talk-to-issue-1.0-SNAPSHOT.jar \
+  -r owner/repo -w /path/to/clone --dry-run \
+  pipeline --context-config examples/context-config.yaml --min-score 70
 ```
 
-| Flag | Required | Description |
-|------|----------|-------------|
-| `-f`, `--file` | * | Path to the meeting transcript file |
-| `-q`, `--workiq-query` | * | Natural language query to fetch transcript from Work IQ |
-| `--tenant-id` | No | Microsoft Entra tenant ID for Work IQ |
-| `--min-score` | No | Minimum quality score to proceed with implementation (default: 70) |
+| Flag | Description |
+|------|-------------|
+| `-f`, `--file` | コンテキストファイルのパス |
+| `-q`, `--workiq-query` | Work IQ からコンテキストを取得するクエリ |
+| `--tenant-id` | Microsoft Entra tenant ID (Work IQ 用) |
+| `--context-config` | YAML 設定ファイルのパス |
+| `--context` | インラインコンテキスト指定 |
+| `--min-score` | 実装に進む最低品質スコア（デフォルト: 70） |
 
-\* Either `--file` or `--workiq-query` must be specified.
+### `serve` — 自律稼働エージェントサーバー
 
-## Project structure
+ローカルマシン上で常駐し、GitHub Webhook をトリガーにパイプラインを自動実行するサーバーモード。
+
+```bash
+java -jar target/talk-to-issue-1.0-SNAPSHOT.jar \
+  -r owner/repo -w /path/to/clone \
+  serve --port 8080 --trigger-label agent-ready
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port` | `8080` | HTTP サーバーポート |
+| `--webhook-secret` | — | GitHub Webhook Secret（HMAC-SHA256 署名検証） |
+| `--context-config` | — | 定期ポーリング用 YAML 設定 |
+| `--poll-interval` | `0` | ポーリング間隔（分）。0 = 無効 |
+| `--trigger-label` | `agent-ready` | 実装をトリガーする Issue ラベル |
+| `--concurrency` | `2` | 最大同時パイプライン実行数 |
+
+**Webhook イベント対応:**
+
+| Event | Trigger | Action |
+|-------|---------|--------|
+| `issues.labeled` | `agent-ready` ラベル付与 | Issue を採点 → 実装 → PR 作成 |
+| `issue_comment.created` | `/pipeline` コメント | Issue コンテキストでパイプライン実行 |
+| `pull_request.opened` | `issue-{N}` ブランチ | Intent Drift 検出 |
+
+**Webhook フォワーディング（smee.io）:**
+
+```bash
+# 1. smee.io チャネルを作成（ブラウザで https://smee.io にアクセス）
+# 2. ローカルにフォワード
+npx smee-client --url https://smee.io/YOUR_CHANNEL \
+  --target http://localhost:8080/webhooks/github
+
+# 3. GitHub リポジトリ → Settings → Webhooks で smee.io URL を登録
+#    Content type: application/json
+#    Events: Issues, Issue comments, Pull requests
+```
+
+## Quick Start: 動作確認ガイド
+
+### Step 1: ビルド
+
+```bash
+mvn clean package -DskipTests
+```
+
+### Step 2: Dry-run で Issue 作成を確認
+
+サンプル会議録からIssueを生成（実際にはIssueは作成されない）：
+
+```bash
+export GITHUB_TOKEN="your-github-token"
+
+java -jar target/talk-to-issue-1.0-SNAPSHOT.jar \
+  -r kohei3110/talk-to-issue -w . --dry-run \
+  compile -f examples/meeting-transcript.txt
+```
+
+### Step 3: 複数コンテキストを集約
+
+会議録とインシデントレポートを同時に解析：
+
+```bash
+# インライン指定
+java -jar target/talk-to-issue-1.0-SNAPSHOT.jar \
+  -r kohei3110/talk-to-issue -w . --dry-run \
+  compile --context file:examples/meeting-transcript.txt,file:examples/incident-report.txt
+
+# YAML設定ファイル経由
+java -jar target/talk-to-issue-1.0-SNAPSHOT.jar \
+  -r kohei3110/talk-to-issue -w . --dry-run \
+  compile --context-config examples/context-config.yaml
+```
+
+### Step 4: サーバーモードの起動
+
+```bash
+java -jar target/talk-to-issue-1.0-SNAPSHOT.jar \
+  -r kohei3110/talk-to-issue -w . --dry-run \
+  serve --port 8080
+```
+
+別ターミナルで確認：
+
+```bash
+# ヘルスチェック
+curl http://localhost:8080/health
+# → {"status":"ok","pending_tasks":0}
+
+# issues.labeled イベントのシミュレーション
+curl -X POST http://localhost:8080/webhooks/github \
+  -H "Content-Type: application/json" \
+  -H "X-GitHub-Event: issues" \
+  -d '{
+    "action": "labeled",
+    "label": {"name": "agent-ready"},
+    "issue": {"number": 1, "title": "Test issue"}
+  }'
+# → 202 Accepted（バックグラウンドで処理開始）
+
+# /pipeline コマンドのシミュレーション
+curl -X POST http://localhost:8080/webhooks/github \
+  -H "Content-Type: application/json" \
+  -H "X-GitHub-Event: issue_comment" \
+  -d '{
+    "action": "created",
+    "comment": {"body": "/pipeline"},
+    "issue": {"number": 1}
+  }'
+# → 202 Accepted
+
+# PR opened による drift detection のシミュレーション
+curl -X POST http://localhost:8080/webhooks/github \
+  -H "Content-Type: application/json" \
+  -H "X-GitHub-Event: pull_request" \
+  -d '{
+    "action": "opened",
+    "pull_request": {
+      "number": 10,
+      "head": {"ref": "issue-1"}
+    }
+  }'
+# → 202 Accepted
+```
+
+### Step 5: Webhook 署名検証の確認
+
+```bash
+# secret 付きで起動
+java -jar target/talk-to-issue-1.0-SNAPSHOT.jar \
+  -r kohei3110/talk-to-issue -w . --dry-run \
+  serve --port 8080 --webhook-secret mysecret
+
+# 署名なしリクエスト → 401
+curl -X POST http://localhost:8080/webhooks/github \
+  -H "X-GitHub-Event: ping" \
+  -d '{}'
+# → 401 Invalid signature
+```
+
+### Step 6: 定期ポーリング付きサーバー
+
+```bash
+java -jar target/talk-to-issue-1.0-SNAPSHOT.jar \
+  -r kohei3110/talk-to-issue -w . --dry-run \
+  serve --port 8080 --context-config examples/serve-config.yaml --poll-interval 60
+# → 60分ごとに needs-triage ラベルの Issue をチェック
+```
+
+## Examples
+
+| File | Description |
+|------|-------------|
+| [examples/meeting-transcript.txt](examples/meeting-transcript.txt) | サンプル会議録（Weekly Engineering Sync） |
+| [examples/incident-report.txt](examples/incident-report.txt) | サンプルインシデントレポート（API レスポンスタイム劣化） |
+| [examples/feature-request.md](examples/feature-request.md) | サンプル機能要件書（リアルタイム通知機能） |
+| [examples/context-config.yaml](examples/context-config.yaml) | コンテキスト設定ファイル例（YAML） |
+| [examples/serve-config.yaml](examples/serve-config.yaml) | サーバーモード用ポーリング設定例 |
+
+## Project Structure
 
 ```
 src/main/java/com/github/talktoissue/
-├── App.java                          # CLI entrypoint (picocli parent command)
+├── App.java                          # CLI エントリポイント (picocli)
+├── IssueCompilerSession.java         # コンテキスト → Issue 変換
+├── IssueCreationSession.java         # Issue 作成 + 実装
+├── IssueQualityScorerSession.java    # Issue 品質採点
+├── IntentDriftDetectorSession.java   # PR Intent Drift 検出
+├── ImplementationSession.java        # コード実装セッション
+├── TranscriptFetchSession.java       # Work IQ トランスクリプト取得
 ├── commands/
-│   ├── RunCommand.java               # run: full workflow (transcript → Issues → PRs)
-│   ├── CompileCommand.java           # compile: transcript → structured Issues
-│   ├── ScoreCommand.java             # score: Issue quality scoring (0-100)
-│   ├── DriftCommand.java             # drift: PR intent drift detection
-│   └── PipelineCommand.java          # pipeline: compile → score → implement → drift
-├── IssueCreationSession.java         # Copilot session: transcript → Issues
-├── IssueCompilerSession.java         # Copilot session: transcript → structured Issues (enhanced)
-├── IssueQualityScorerSession.java    # Copilot session: Issue quality scoring
-├── IntentDriftDetectorSession.java   # Copilot session: PR drift detection
-├── ImplementationSession.java        # Copilot session: Issue → branch → PR
-├── TranscriptFetchSession.java       # Copilot session: Work IQ transcript fetch
+│   ├── CompileCommand.java           # compile サブコマンド
+│   ├── ScoreCommand.java             # score サブコマンド
+│   ├── DriftCommand.java             # drift サブコマンド
+│   ├── RunCommand.java               # run サブコマンド
+│   ├── PipelineCommand.java          # pipeline サブコマンド
+│   └── ServeCommand.java             # serve サブコマンド（サーバーモード）
+├── context/
+│   ├── ContextSource.java            # コンテキストソースインターフェース
+│   ├── ContextAggregator.java        # 複数ソースの並列集約
+│   ├── ContextConfig.java            # YAML 設定パーサー
+│   ├── FileContextSource.java        # ローカルファイル読み込み
+│   ├── GitHubContextSource.java      # GitHub Issues/PRs 取得
+│   ├── WorkIQContextSource.java      # Microsoft 365 データ取得
+│   └── MCPContextSource.java         # MCP サーバー経由コンテキスト
+├── server/
+│   ├── AgentServer.java              # Javalin HTTP サーバー
+│   ├── WebhookValidator.java         # HMAC-SHA256 署名検証
+│   ├── EventRouter.java              # Webhook イベントルーティング
+│   ├── WorkQueue.java                # 非同期ジョブキュー
+│   └── Scheduler.java                # 定期ポーリングスケジューラ
 └── tools/
-    ├── CreateIssueTool.java          # Custom tool: create GitHub Issue
-    ├── ListLabelsTool.java           # Custom tool: list repo labels (read-only)
-    ├── CreateBranchTool.java         # Custom tool: git checkout -b
-    ├── CommitAndPushTool.java        # Custom tool: git add/commit/push
-    ├── CreatePullRequestTool.java    # Custom tool: create GitHub PR
-    ├── GetIssueTool.java             # Custom tool: fetch Issue details (read-only)
-    ├── GetPullRequestDiffTool.java   # Custom tool: fetch PR diff (read-only)
-    ├── ReportQualityScoreTool.java   # Custom tool: report quality score
-    ├── ReportDriftTool.java          # Custom tool: report drift analysis
-    └── ReportTranscriptTool.java     # Custom tool: report fetched transcript
+    ├── CreateIssueTool.java           # Issue 作成ツール
+    ├── CreateBranchTool.java          # ブランチ作成ツール
+    ├── CommitAndPushTool.java         # コミット＆プッシュツール
+    ├── CreatePullRequestTool.java     # PR 作成ツール
+    ├── GetIssueTool.java              # Issue 取得ツール
+    ├── GetPullRequestDiffTool.java    # PR diff 取得ツール
+    ├── ListLabelsTool.java            # ラベル一覧取得ツール
+    ├── ReportDriftTool.java           # ドリフトレポートツール
+    ├── ReportQualityScoreTool.java    # 品質スコアレポートツール
+    └── ReportTranscriptTool.java      # トランスクリプトレポートツール
 ```
 
 ## License

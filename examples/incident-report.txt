@@ -1,0 +1,31 @@
+From: Dave (SRE) <dave@example.com>
+To: Engineering Team <eng-team@example.com>
+Subject: [Incident] API response time degradation – April 23, 2026
+Date: April 23, 2026 14:30 JST
+
+Hi team,
+
+We observed a significant increase in API response times starting around 13:00 JST today.
+
+## Impact
+- GET /api/users p99 latency jumped from 120ms to 2.8s
+- Error rate increased from 0.1% to 3.2%
+- Approximately 150 users were affected during the 90-minute window
+
+## Root Cause
+The database connection pool was exhausted because the new user search feature
+(deployed yesterday) wasn't releasing connections properly when queries timed out.
+
+## Resolution
+- Hotfix deployed at 14:15 JST: added proper connection release in finally blocks
+- Connection pool size temporarily increased from 10 to 25
+
+## Action Items
+1. Add connection pool monitoring metrics (current size, active, idle, waiting)
+2. Implement circuit breaker pattern for database calls
+3. Add integration test for connection leak scenarios
+4. Set up alerting for connection pool utilization > 80%
+5. Review all database access code for similar connection leak patterns
+
+Best regards,
+Dave

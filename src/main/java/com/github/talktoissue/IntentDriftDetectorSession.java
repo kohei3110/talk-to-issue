@@ -11,7 +11,10 @@ import com.github.copilot.sdk.json.SystemMessageConfig;
 import com.github.copilot.sdk.SystemMessageMode;
 import com.github.talktoissue.tools.GetIssueTool;
 import com.github.talktoissue.tools.GetPullRequestDiffTool;
+import com.github.talktoissue.tools.ListDirectoryTool;
+import com.github.talktoissue.tools.ReadFileTool;
 import com.github.talktoissue.tools.ReportDriftTool;
+import com.github.talktoissue.tools.SearchCodeTool;
 import org.kohsuke.github.GHRepository;
 
 import java.io.File;
@@ -31,8 +34,9 @@ public class IntentDriftDetectorSession {
         2. Use `get_issue` to fetch the linked issue. If the issue number is not provided,
            extract it from the PR body (look for "Closes #N", "Fixes #N", or "Resolves #N").
         3. If a meeting transcript is provided, consider it as additional context for the original intent.
-        4. Explore the codebase using built-in tools (read_file, list_dir, search_code) to understand
+        4. Explore the codebase using custom tools (`read_file`, `list_dir`, `search_code`) to understand
            the context of the changes.
+           Do NOT use built-in filesystem tools (glob, view, grep). Use the custom tools instead.
         5. Compare the PR changes against the requirements and report findings using `report_drift`.
 
         ## Drift Types to Detect
@@ -96,11 +100,17 @@ public class IntentDriftDetectorSession {
         var getIssueTool = new GetIssueTool(repository);
         var getPRDiffTool = new GetPullRequestDiffTool(repository);
         var reportDriftTool = new ReportDriftTool();
+        var readFileTool = new ReadFileTool(workingDir);
+        var listDirTool = new ListDirectoryTool(workingDir);
+        var searchCodeTool = new SearchCodeTool(workingDir);
 
         var tools = new ArrayList<>(List.of(
             getIssueTool.build(),
             getPRDiffTool.build(),
-            reportDriftTool.build()
+            reportDriftTool.build(),
+            readFileTool.build(),
+            listDirTool.build(),
+            searchCodeTool.build()
         ));
 
         var session = client.createSession(

@@ -5,11 +5,13 @@ import com.github.talktoissue.commands.DriftCommand;
 import com.github.talktoissue.commands.PipelineCommand;
 import com.github.talktoissue.commands.RunCommand;
 import com.github.talktoissue.commands.ScoreCommand;
+import com.github.talktoissue.commands.ServeCommand;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
 import java.io.File;
+import java.io.IOException;
 
 @Command(
     name = "talk-to-issue",
@@ -21,7 +23,8 @@ import java.io.File;
         CompileCommand.class,
         ScoreCommand.class,
         DriftCommand.class,
-        PipelineCommand.class
+        PipelineCommand.class,
+        ServeCommand.class
     }
 )
 public class App implements Runnable {
@@ -47,7 +50,14 @@ public class App implements Runnable {
     }
 
     public File getWorkingDir() {
-        return workingDir;
+        if (workingDir != null) {
+            try {
+                return workingDir.getCanonicalFile();
+            } catch (IOException e) {
+                return workingDir;
+            }
+        }
+        return null;
     }
 
     public String getModel() {

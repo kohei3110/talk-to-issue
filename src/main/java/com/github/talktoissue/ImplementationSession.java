@@ -7,11 +7,17 @@ import com.github.copilot.sdk.generated.SessionIdleEvent;
 import com.github.copilot.sdk.json.MessageOptions;
 import com.github.copilot.sdk.json.PermissionHandler;
 import com.github.copilot.sdk.json.SessionConfig;
+import com.github.copilot.sdk.json.SessionHooks;
 import com.github.copilot.sdk.json.SystemMessageConfig;
 import com.github.copilot.sdk.SystemMessageMode;
 import com.github.talktoissue.tools.CommitAndPushTool;
 import com.github.talktoissue.tools.CreateBranchTool;
 import com.github.talktoissue.tools.CreatePullRequestTool;
+import com.github.talktoissue.tools.ExecuteCommandTool;
+import com.github.talktoissue.tools.ListDirectoryTool;
+import com.github.talktoissue.tools.ReadFileTool;
+import com.github.talktoissue.tools.SearchCodeTool;
+import com.github.talktoissue.tools.WriteFileTool;
 import org.kohsuke.github.GHRepository;
 
 import java.io.File;
@@ -24,12 +30,18 @@ public class ImplementationSession {
         <rules>
         You are an autonomous software engineer. Your job is to:
         1. Read the given GitHub issue carefully.
-        2. Understand the codebase using the built-in tools (read_file, list_dir, search_code).
-        3. Implement the required changes using write_file and execute_command.
+        2. Understand the codebase using the custom tools: `list_dir`, `read_file`, `search_code`.
+           - Use `list_dir` to explore directory structure.
+           - Use `read_file` to read file contents (supports line ranges).
+           - Use `search_code` to grep for patterns across the codebase.
+        3. Implement the required changes using `write_file` and `execute_command`.
         4. Once implementation is complete, follow this exact workflow:
            a. Call `create_branch` with the issue number to create a feature branch.
            b. Call `commit_and_push` with a descriptive commit message.
            c. Call `create_pull_request` with a title, body describing your changes, and the issue number.
+
+        IMPORTANT: Do NOT use built-in filesystem tools (glob, view, grep). Use the custom tools
+        listed above instead: list_dir, read_file, search_code, write_file, execute_command.
 
         Guidelines:
         - Write clean, idiomatic code following the project's existing conventions.
@@ -56,16 +68,37 @@ public class ImplementationSession {
     }
 
     public void run(int issueNumber, String issueTitle, String issueBody) throws Exception {
+        var readFileTool = new ReadFileTool(workingDir);
+        var listDirTool = new ListDirectoryTool(workingDir);
+        var searchCodeTool = new SearchCodeTool(workingDir);
+        var writeFileTool = new WriteFileTool(workingDir, dryRun);
+        var executeCommandTool = new ExecuteCommandTool(workingDir, dryRun);
         var createBranchTool = new CreateBranchTool(workingDir);
         var commitAndPushTool = new CommitAndPushTool(workingDir, dryRun);
         var createPullRequestTool = new CreatePullRequestTool(repository, dryRun);
+
+        var hooks = new SessionHooks()
+            .setOnPostToolUse((input, invocation) -> {
+                System.out.println("[DEBUG] Tool: " + input.getToolName() +
+                    " | CWD: " + input.getCwd() +
+                    " | Result: " + input.getToolResult());
+                return CompletableFuture.completedFuture(null);
+            });
+
+        System.out.println("[DEBUG] Working directory: " + workingDir.getAbsolutePath());
 
         var session = client.createSession(
             new SessionConfig()
                 .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
                 .setModel(model)
                 .setWorkingDirectory(workingDir.getAbsolutePath())
+                .setHooks(hooks)
                 .setTools(List.of(
+                    readFileTool.build(),
+                    listDirTool.build(),
+                    searchCodeTool.build(),
+                    writeFileTool.build(),
+                    executeCommandTool.build(),
                     createBranchTool.build(),
                     commitAndPushTool.build(),
                     createPullRequestTool.build()
