@@ -2,18 +2,18 @@ package com.github.talktoissue.commands;
 
 import com.github.copilot.sdk.CopilotClient;
 import com.github.talktoissue.App;
+import com.github.talktoissue.CodebaseAnalysisSession;
 import com.github.talktoissue.CodeReviewSession;
 import com.github.talktoissue.ImplementationSession;
 import com.github.talktoissue.IntentDriftDetectorSession;
-import com.github.talktoissue.IssueCompilerSession;
 import com.github.talktoissue.IssueQualityScorerSession;
 import com.github.talktoissue.IssueRefineSession;
-import com.github.talktoissue.TranscriptFetchSession;
+import com.github.talktoissue.PrioritizationSession;
+import com.github.talktoissue.SpecDesignSession;
 import com.github.talktoissue.VerificationSession;
-import com.github.talktoissue.context.ContextAggregator;
-import com.github.talktoissue.context.ContextConfig;
-import com.github.talktoissue.context.ContextSource;
 import com.github.talktoissue.tools.CreateIssueTool;
+import com.github.talktoissue.tools.ReportDiscoveryTool;
+import com.github.talktoissue.tools.ReportPrioritizationTool;
 import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GitHubBuilder;
 import picocli.CommandLine.Command;
@@ -21,79 +21,46 @@ import picocli.CommandLine.Option;
 import picocli.CommandLine.ParentCommand;
 
 import java.io.File;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
 
-    @Command(
-    name = "pipeline",
-    description = "Full pipeline: compile → score (with auto-refine) → implement (with verification) → drift detection → code review."
+@Command(
+    name = "autonomous",
+    description = "Autonomous improvement cycle: analyze codebase → discover issues → prioritize → design specs → implement → verify → review. "
+        + "AI autonomously identifies improvements and creates PRs without human intervention until the PR review stage."
 )
-public class PipelineCommand implements Callable<Integer> {
+public class AutonomousCommand implements Callable<Integer> {
 
     @ParentCommand
     private App parent;
 
-    @Option(names = {"-f", "--file"},
-            description = "Path to a context file (transcript, document, etc.)")
-    private Path transcriptFile;
-
-    @Option(names = {"-q", "--workiq-query"},
-            description = "Natural language query to fetch context from Work IQ")
-    private String workiqQuery;
-
-    @Option(names = {"--tenant-id"},
-            description = "Microsoft Entra tenant ID for Work IQ authentication")
-    private String tenantId;
+    @Option(names = {"--max-issues"}, defaultValue = "3",
+            description = "Maximum number of issues to process per cycle. Default: ${DEFAULT-VALUE}")
+    private int maxIssues;
 
     @Option(names = {"--min-score"}, defaultValue = "70",
-            description = "Minimum quality score to proceed with implementation. Default: ${DEFAULT-VALUE}")
+            description = "Minimum quality score for issues before implementation. Default: ${DEFAULT-VALUE}")
     private int minScore;
-
-    @Option(names = {"--context-config"},
-            description = "Path to a YAML file defining multiple context sources")
-    private Path contextConfig;
-
-    @Option(names = {"--context"}, split = ",",
-            description = "Inline context source(s): file:<path>, workiq:<query>, github:issues, github:prs")
-    private List<String> contextSpecs;
 
     @Option(names = {"--max-refine-attempts"}, defaultValue = "3",
             description = "Maximum attempts to auto-refine issues below quality threshold. Default: ${DEFAULT-VALUE}")
     private int maxRefineAttempts;
 
     @Option(names = {"--max-fix-attempts"}, defaultValue = "3",
-            description = "Maximum attempts to fix build/test failures after implementation. Default: ${DEFAULT-VALUE}")
+            description = "Maximum attempts to fix build/test failures. Default: ${DEFAULT-VALUE}")
     private int maxFixAttempts;
 
     @Option(names = {"--skip-review"},
             description = "Skip the self code review step")
     private boolean skipReview;
 
+    @Option(names = {"--categories"}, split = ",",
+            description = "Filter analysis categories (comma-separated). Options: todo, test_gap, security, tech_debt, error_handling, documentation")
+    private List<String> categories;
+
     @Override
     public Integer call() throws Exception {
-        boolean hasLegacy = transcriptFile != null || workiqQuery != null;
-        boolean hasNew = contextConfig != null || (contextSpecs != null && !contextSpecs.isEmpty());
-
-        if (!hasLegacy && !hasNew) {
-            System.err.println("Error: Specify context via --file, --workiq-query, --context-config, or --context.");
-            return 1;
-        }
-        if (hasLegacy && hasNew) {
-            System.err.println("Error: Cannot mix legacy options (--file/--workiq-query) with --context-config/--context.");
-            return 1;
-        }
-        if (transcriptFile != null && workiqQuery != null) {
-            System.err.println("Error: --file and --workiq-query are mutually exclusive.");
-            return 1;
-        }
-        if (transcriptFile != null && !Files.exists(transcriptFile)) {
-            System.err.println("Error: File not found: " + transcriptFile);
-            return 1;
-        }
-
         String token = System.getenv("GITHUB_TOKEN");
         if (token == null || token.isBlank()) {
             System.err.println("Error: GITHUB_TOKEN environment variable is not set.");
@@ -102,11 +69,9 @@ public class PipelineCommand implements Callable<Integer> {
 
         File workingDir = parent.getWorkingDir();
         if (workingDir == null || !workingDir.isDirectory()) {
-            System.err.println("Error: --working-dir is required for the pipeline command.");
+            System.err.println("Error: --working-dir is required for the autonomous command.");
             return 1;
         }
-
-        String transcript = transcriptFile != null ? Files.readString(transcriptFile) : null;
 
         GitHub gitHub = new GitHubBuilder().withOAuthToken(token).build();
         var repository = gitHub.getRepository(parent.getRepoFullName());
@@ -119,54 +84,91 @@ public class PipelineCommand implements Callable<Integer> {
             System.out.println("=== DRY-RUN MODE ===");
         }
 
+        System.out.println("\n╔══════════════════════════════════════════╗");
+        System.out.println("║   Autonomous Improvement Cycle Starting  ║");
+        System.out.println("╚══════════════════════════════════════════╝");
+        System.out.println("Max issues: " + maxIssues);
+        System.out.println("Min quality score: " + minScore);
+        System.out.println("Categories: " + (categories != null ? String.join(", ", categories) : "all"));
+
         try (var client = new CopilotClient()) {
             client.start().get();
             System.out.println("Copilot SDK started.");
 
-            // Step 0: Resolve context
-            String resolvedContext;
-            if (hasNew) {
-                List<ContextSource> sources;
-                if (contextConfig != null) {
-                    sources = ContextConfig.load(contextConfig, client, model, repository);
-                } else {
-                    sources = CompileCommand.parseInlineContextSpecs(contextSpecs, client, model, repository);
-                }
-                System.out.println("\n=== Step 0: Aggregating " + sources.size() + " context source(s) ===");
-                resolvedContext = new ContextAggregator(sources).aggregate();
-            } else if (transcript != null) {
-                resolvedContext = transcript;
-            } else {
-                System.out.println("\n=== Step 0: Fetching context from Work IQ ===");
-                var fetchSession = new TranscriptFetchSession(client, model, tenantId);
-                resolvedContext = fetchSession.run(workiqQuery);
-                System.out.println("Context fetched (" + resolvedContext.length() + " chars)");
-            }
+            // ═══════════════════════════════════════════
+            // Step 1: Codebase Analysis — Discover improvements
+            // ═══════════════════════════════════════════
+            System.out.println("\n=== Step 1: Analyzing codebase for improvement opportunities ===");
+            var analysisSession = new CodebaseAnalysisSession(client, model, workingDir, categories);
+            List<ReportDiscoveryTool.Discovery> discoveries = analysisSession.run();
 
-            // Step 1: Compile transcript into issues
-            System.out.println("\n=== Step 1: Compiling transcript into coding-agent-ready issues ===");
-            var compilerSession = new IssueCompilerSession(client, model, repository, workingDir, dryRun);
-            List<CreateIssueTool.CreatedIssue> createdIssues = compilerSession.run(resolvedContext);
-
-            System.out.println("Created " + createdIssues.size() + " issue(s)");
-            if (createdIssues.isEmpty()) {
-                System.out.println("No issues created. Pipeline complete.");
+            System.out.println("Discovered " + discoveries.size() + " improvement opportunity(ies)");
+            if (discoveries.isEmpty()) {
+                System.out.println("No improvements found. Cycle complete.");
                 return 0;
             }
 
-            // Step 2: Score each issue (with auto-refine loop)
-            System.out.println("\n=== Step 2: Scoring issue quality (min-score: " + minScore + ", max-refine: " + maxRefineAttempts + ") ===");
+            // ═══════════════════════════════════════════
+            // Step 2: Prioritization — Select top N items
+            // ═══════════════════════════════════════════
+            System.out.println("\n=== Step 2: Prioritizing discoveries (selecting top " + maxIssues + ") ===");
+            List<ReportPrioritizationTool.PrioritizedItem> prioritized;
+            if (discoveries.size() <= maxIssues) {
+                // No need for prioritization if within limit
+                prioritized = discoveries.stream()
+                    .map(d -> new ReportPrioritizationTool.PrioritizedItem(
+                        d.title(), d.description(), d.category(),
+                        discoveries.indexOf(d) + 1, "Within max-issues limit"))
+                    .toList();
+                System.out.println("All " + prioritized.size() + " item(s) within limit, skipping prioritization.");
+            } else {
+                var prioritizationSession = new PrioritizationSession(client, model);
+                prioritized = prioritizationSession.run(discoveries, maxIssues);
+                System.out.println("Selected " + prioritized.size() + " item(s) for implementation");
+            }
+
+            if (prioritized.isEmpty()) {
+                System.out.println("No items selected. Cycle complete.");
+                return 0;
+            }
+
+            // ═══════════════════════════════════════════
+            // Step 3: Spec Design — Create detailed Issues
+            // ═══════════════════════════════════════════
+            System.out.println("\n=== Step 3: Designing specifications and creating Issues ===");
+            var allCreatedIssues = new ArrayList<CreateIssueTool.CreatedIssue>();
+            for (var item : prioritized) {
+                System.out.println("\n--- Designing spec for: " + item.title() + " ---");
+                try {
+                    var specSession = new SpecDesignSession(client, model, repository, workingDir, dryRun);
+                    var issues = specSession.run(item);
+                    allCreatedIssues.addAll(issues);
+                    System.out.println("  ✓ Created " + issues.size() + " issue(s)");
+                } catch (Exception e) {
+                    System.err.println("  ✗ Spec design failed: " + e.getMessage());
+                }
+            }
+
+            System.out.println("\nTotal issues created: " + allCreatedIssues.size());
+            if (allCreatedIssues.isEmpty()) {
+                System.out.println("No issues created. Cycle complete.");
+                return 0;
+            }
+
+            // ═══════════════════════════════════════════
+            // Step 4: Score & Refine Loop
+            // ═══════════════════════════════════════════
+            System.out.println("\n=== Step 4: Scoring issue quality (min-score: " + minScore + ", max-refine: " + maxRefineAttempts + ") ===");
             var qualifiedIssues = new ArrayList<CreateIssueTool.CreatedIssue>();
             var skippedIssues = new ArrayList<CreateIssueTool.CreatedIssue>();
 
-            for (var issue : createdIssues) {
+            for (var issue : allCreatedIssues) {
                 System.out.println("\nScoring Issue #" + issue.number() + ": " + issue.title());
                 try {
                     var scorerSession = new IssueQualityScorerSession(client, model, repository, workingDir);
                     var score = scorerSession.run(issue.number());
                     System.out.println("  Score: " + score.overallScore() + "/100");
 
-                    // Auto-refine loop: if below threshold, try to improve the issue
                     int refineAttempt = 0;
                     while (score.overallScore() < minScore && refineAttempt < maxRefineAttempts) {
                         refineAttempt++;
@@ -200,12 +202,14 @@ public class PipelineCommand implements Callable<Integer> {
             }
 
             if (qualifiedIssues.isEmpty()) {
-                System.out.println("\nNo issues passed quality threshold. Pipeline complete.");
+                System.out.println("\nNo issues passed quality threshold. Cycle complete.");
                 return 0;
             }
 
-            // Step 3: Implement qualified issues (with build/test verification loop)
-            System.out.println("\n=== Step 3: Implementing " + qualifiedIssues.size() + " qualified issue(s) (max-fix: " + maxFixAttempts + ") ===");
+            // ═══════════════════════════════════════════
+            // Step 5: Implement & Verify Loop
+            // ═══════════════════════════════════════════
+            System.out.println("\n=== Step 5: Implementing " + qualifiedIssues.size() + " qualified issue(s) (max-fix: " + maxFixAttempts + ") ===");
 
             record ImplResult(CreateIssueTool.CreatedIssue issue, boolean success, int prNumber) {}
             var implResults = new ArrayList<ImplResult>();
@@ -226,7 +230,7 @@ public class PipelineCommand implements Callable<Integer> {
                     var implSession = new ImplementationSession(client, model, repository, workingDir, dryRun);
                     implSession.run(issue.number(), issue.title(), issueBody);
 
-                    // Step 3b: Verification loop — build and test, fix if needed
+                    // Verification loop
                     boolean verified = false;
                     for (int fixAttempt = 0; fixAttempt <= maxFixAttempts; fixAttempt++) {
                         System.out.println("  🔍 Verifying build and tests"
@@ -247,7 +251,6 @@ public class PipelineCommand implements Callable<Integer> {
                                 break;
                             }
 
-                            // Feed error context back to implementation session for self-correction
                             System.out.println("  ↻ Build/tests failed. Running self-correction...");
                             var errorContext = new StringBuilder();
                             if (!result.buildSuccess()) {
@@ -291,14 +294,15 @@ public class PipelineCommand implements Callable<Integer> {
                 }
             }
 
-            // Step 4: Drift detection + code review for successful implementations
+            // ═══════════════════════════════════════════
+            // Step 6: Drift Detection & Code Review
+            // ═══════════════════════════════════════════
             var successfulImpls = implResults.stream().filter(ImplResult::success).toList();
             if (!successfulImpls.isEmpty() && !dryRun) {
-                System.out.println("\n=== Step 4: Running drift detection & code review ===");
+                System.out.println("\n=== Step 6: Running drift detection & code review ===");
                 for (var impl : successfulImpls) {
                     System.out.println("\nChecking drift for Issue #" + impl.issue().number());
                     try {
-                        // Find the PR for this issue
                         var prs = repository.queryPullRequests()
                             .head(repository.getOwnerName() + ":issue-" + impl.issue().number())
                             .base("main")
@@ -311,9 +315,8 @@ public class PipelineCommand implements Callable<Integer> {
 
                         int prNum = prs.get(0).getNumber();
 
-                        // Step 4a: Drift detection
                         var driftSession = new IntentDriftDetectorSession(client, model, repository, workingDir);
-                        var report = driftSession.run(prNum, impl.issue().number(), resolvedContext);
+                        var report = driftSession.run(prNum, impl.issue().number(), null);
 
                         String icon = switch (report.verdict()) {
                             case "pass" -> "✓";
@@ -324,7 +327,6 @@ public class PipelineCommand implements Callable<Integer> {
                         System.out.println("  " + icon + " Drift: " + report.verdict().toUpperCase()
                             + " (" + report.drifts().size() + " drift(s))");
 
-                        // Step 4b: Self code review
                         if (!skipReview) {
                             System.out.println("  📝 Running self code review...");
                             try {
@@ -345,13 +347,6 @@ public class PipelineCommand implements Callable<Integer> {
                                 System.out.println("  " + reviewIcon + " Review: " + review.verdict().toUpperCase()
                                     + " (" + criticalCount + " critical, " + warningCount + " warning, "
                                     + review.findings().size() + " total)");
-
-                                if (!review.positives().isEmpty()) {
-                                    System.out.println("  Positives:");
-                                    for (var p : review.positives()) {
-                                        System.out.println("    + " + p);
-                                    }
-                                }
                             } catch (Exception e) {
                                 System.err.println("  ⚠ Code review failed: " + e.getMessage());
                             }
@@ -361,15 +356,21 @@ public class PipelineCommand implements Callable<Integer> {
                     }
                 }
             } else if (dryRun) {
-                System.out.println("\n=== Step 4: Drift detection & code review skipped (dry-run) ===");
+                System.out.println("\n=== Step 6: Drift detection & code review skipped (dry-run) ===");
             }
 
+            // ═══════════════════════════════════════════
             // Summary
+            // ═══════════════════════════════════════════
             long successCount = implResults.stream().filter(ImplResult::success).count();
             long failCount = implResults.stream().filter(r -> !r.success()).count();
 
-            System.out.println("\n=== Pipeline Summary ===");
-            System.out.println("Issues compiled:    " + createdIssues.size());
+            System.out.println("\n╔══════════════════════════════════════════╗");
+            System.out.println("║     Autonomous Cycle Summary             ║");
+            System.out.println("╚══════════════════════════════════════════╝");
+            System.out.println("Discoveries found:  " + discoveries.size());
+            System.out.println("Items prioritized:  " + prioritized.size());
+            System.out.println("Issues created:     " + allCreatedIssues.size());
             System.out.println("Issues qualified:   " + qualifiedIssues.size() + " (min-score: " + minScore + ")");
             System.out.println("Issues skipped:     " + skippedIssues.size());
             System.out.println("Implementations:    " + successCount + " succeeded, " + failCount + " failed");
