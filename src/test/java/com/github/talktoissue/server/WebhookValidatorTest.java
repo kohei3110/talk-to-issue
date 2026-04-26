@@ -10,7 +10,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class WebhookValidatorTest {
 
-    private static final String SECRET = "test-webhook-secret";
+    // SECRET is now loaded from environment variable, with fallback for test stability
+    private static final String SECRET = System.getenv().getOrDefault("WEBHOOK_TEST_SECRET", "test-webhook-secret");
 
     private final WebhookValidator validator = new WebhookValidator(SECRET);
 
