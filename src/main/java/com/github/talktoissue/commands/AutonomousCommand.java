@@ -2,18 +2,18 @@ package com.github.talktoissue.commands;
 
 import com.github.copilot.sdk.CopilotClient;
 import com.github.talktoissue.App;
+import com.github.talktoissue.CodebaseAnalysisSession;
 import com.github.talktoissue.CodeReviewSession;
 import com.github.talktoissue.ImplementationSession;
 import com.github.talktoissue.IntentDriftDetectorSession;
-import com.github.talktoissue.IssueCompilerSession;
 import com.github.talktoissue.IssueQualityScorerSession;
 import com.github.talktoissue.IssueRefineSession;
-import com.github.talktoissue.TranscriptFetchSession;
+import com.github.talktoissue.PrioritizationSession;
+import com.github.talktoissue.SpecDesignSession;
 import com.github.talktoissue.VerificationSession;
-import com.github.talktoissue.context.ContextAggregator;
-import com.github.talktoissue.context.ContextConfig;
-import com.github.talktoissue.context.ContextSource;
 import com.github.talktoissue.tools.CreateIssueTool;
+import com.github.talktoissue.tools.ReportDiscoveryTool;
+import com.github.talktoissue.tools.ReportPrioritizationTool;
 import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GitHubBuilder;
 import picocli.CommandLine.Command;
@@ -21,44 +21,26 @@ import picocli.CommandLine.Option;
 import picocli.CommandLine.ParentCommand;
 
 import java.io.File;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
 
-    @Command(
-    name = "pipeline",
-    description = "Full pipeline: compile → score (with auto-refine) → implement (with verification) → drift detection → code review."
+@Command(
+    name = "autonomous",
+    description = "Autonomous improvement cycle: analyze codebase → prioritize → design issues → score/refine → implement → verify → review."
 )
-public class PipelineCommand implements Callable<Integer> {
+public class AutonomousCommand implements Callable<Integer> {
 
     @ParentCommand
     private App parent;
 
-    @Option(names = {"-f", "--file"},
-            description = "Path to a context file (transcript, document, etc.)")
-    private Path transcriptFile;
-
-    @Option(names = {"-q", "--workiq-query"},
-            description = "Natural language query to fetch context from Work IQ")
-    private String workiqQuery;
-
-    @Option(names = {"--tenant-id"},
-            description = "Microsoft Entra tenant ID for Work IQ authentication")
-    private String tenantId;
+    @Option(names = {"--max-issues"}, defaultValue = "3",
+            description = "Maximum number of issues to create and implement. Default: ${DEFAULT-VALUE}")
+    private int maxIssues;
 
     @Option(names = {"--min-score"}, defaultValue = "70",
-            description = "Minimum quality score to proceed with implementation. Default: ${DEFAULT-VALUE}")
+            description = "Minimum quality score for issues to proceed with implementation. Default: ${DEFAULT-VALUE}")
     private int minScore;
-
-    @Option(names = {"--context-config"},
-            description = "Path to a YAML file defining multiple context sources")
-    private Path contextConfig;
-
-    @Option(names = {"--context"}, split = ",",
-            description = "Inline context source(s): file:<path>, workiq:<query>, github:issues, github:prs")
-    private List<String> contextSpecs;
 
     @Option(names = {"--max-refine-attempts"}, defaultValue = "3",
             description = "Maximum attempts to auto-refine issues below quality threshold. Default: ${DEFAULT-VALUE}")
@@ -72,28 +54,12 @@ public class PipelineCommand implements Callable<Integer> {
             description = "Skip the self code review step")
     private boolean skipReview;
 
+    @Option(names = {"--categories"}, split = ",",
+            description = "Comma-separated categories to focus on: todo,test_gap,security,tech_debt,error_handling,documentation")
+    private List<String> categories;
+
     @Override
     public Integer call() throws Exception {
-        boolean hasLegacy = transcriptFile != null || workiqQuery != null;
-        boolean hasNew = contextConfig != null || (contextSpecs != null && !contextSpecs.isEmpty());
-
-        if (!hasLegacy && !hasNew) {
-            System.err.println("Error: Specify context via --file, --workiq-query, --context-config, or --context.");
-            return 1;
-        }
-        if (hasLegacy && hasNew) {
-            System.err.println("Error: Cannot mix legacy options (--file/--workiq-query) with --context-config/--context.");
-            return 1;
-        }
-        if (transcriptFile != null && workiqQuery != null) {
-            System.err.println("Error: --file and --workiq-query are mutually exclusive.");
-            return 1;
-        }
-        if (transcriptFile != null && !Files.exists(transcriptFile)) {
-            System.err.println("Error: File not found: " + transcriptFile);
-            return 1;
-        }
-
         String token = System.getenv("GITHUB_TOKEN");
         if (token == null || token.isBlank()) {
             System.err.println("Error: GITHUB_TOKEN environment variable is not set.");
@@ -102,11 +68,9 @@ public class PipelineCommand implements Callable<Integer> {
 
         File workingDir = parent.getWorkingDir();
         if (workingDir == null || !workingDir.isDirectory()) {
-            System.err.println("Error: --working-dir is required for the pipeline command.");
+            System.err.println("Error: --working-dir is required for the autonomous command.");
             return 1;
         }
-
-        String transcript = transcriptFile != null ? Files.readString(transcriptFile) : null;
 
         GitHub gitHub = new GitHubBuilder().withOAuthToken(token).build();
         var repository = gitHub.getRepository(parent.getRepoFullName());
@@ -123,50 +87,84 @@ public class PipelineCommand implements Callable<Integer> {
             client.start().get();
             System.out.println("Copilot SDK started.");
 
-            // Step 0: Resolve context
-            String resolvedContext;
-            if (hasNew) {
-                List<ContextSource> sources;
-                if (contextConfig != null) {
-                    sources = ContextConfig.load(contextConfig, client, model, repository);
-                } else {
-                    sources = CompileCommand.parseInlineContextSpecs(contextSpecs, client, model, repository);
-                }
-                System.out.println("\n=== Step 0: Aggregating " + sources.size() + " context source(s) ===");
-                resolvedContext = new ContextAggregator(sources).aggregate();
-            } else if (transcript != null) {
-                resolvedContext = transcript;
-            } else {
-                System.out.println("\n=== Step 0: Fetching context from Work IQ ===");
-                var fetchSession = new TranscriptFetchSession(client, model, tenantId);
-                resolvedContext = fetchSession.run(workiqQuery);
-                System.out.println("Context fetched (" + resolvedContext.length() + " chars)");
-            }
+            // Step 1: Codebase Analysis
+            System.out.println("\n┌─────────────────────────────────────────────────┐");
+            System.out.println("│ Step 1: Codebase Analysis                       │");
+            System.out.println("└─────────────────────────────────────────────────┘");
+            var analysisSession = new CodebaseAnalysisSession(client, model, workingDir, categories);
+            List<ReportDiscoveryTool.Discovery> discoveries = analysisSession.run();
 
-            // Step 1: Compile transcript into issues
-            System.out.println("\n=== Step 1: Compiling transcript into coding-agent-ready issues ===");
-            var compilerSession = new IssueCompilerSession(client, model, repository, workingDir, dryRun);
-            List<CreateIssueTool.CreatedIssue> createdIssues = compilerSession.run(resolvedContext);
-
-            System.out.println("Created " + createdIssues.size() + " issue(s)");
-            if (createdIssues.isEmpty()) {
-                System.out.println("No issues created. Pipeline complete.");
+            System.out.println("Discovered " + discoveries.size() + " improvement opportunity(ies).");
+            if (discoveries.isEmpty()) {
+                System.out.println("No improvements found. Autonomous cycle complete.");
                 return 0;
             }
 
-            // Step 2: Score each issue (with auto-refine loop)
-            System.out.println("\n=== Step 2: Scoring issue quality (min-score: " + minScore + ", max-refine: " + maxRefineAttempts + ") ===");
+            // Step 2: Prioritization
+            System.out.println("\n┌─────────────────────────────────────────────────┐");
+            System.out.println("│ Step 2: Prioritization                          │");
+            System.out.println("└─────────────────────────────────────────────────┘");
+            List<ReportPrioritizationTool.PrioritizedItem> prioritizedItems;
+            if (discoveries.size() <= maxIssues) {
+                System.out.println("Discoveries (" + discoveries.size() + ") ≤ max-issues (" + maxIssues + "), skipping prioritization.");
+                prioritizedItems = new ArrayList<>();
+                for (int i = 0; i < discoveries.size(); i++) {
+                    var d = discoveries.get(i);
+                    prioritizedItems.add(new ReportPrioritizationTool.PrioritizedItem(
+                        d.title(), d.description(), d.category(), i + 1,
+                        "Auto-included (total discoveries within limit)"
+                    ));
+                }
+            } else {
+                var prioritizationSession = new PrioritizationSession(client, model);
+                prioritizedItems = prioritizationSession.run(discoveries, maxIssues);
+                System.out.println("Selected " + prioritizedItems.size() + " item(s) for implementation.");
+            }
+
+            if (prioritizedItems.isEmpty()) {
+                System.out.println("No items selected. Autonomous cycle complete.");
+                return 0;
+            }
+
+            // Step 3: Spec Design → Create Issues
+            System.out.println("\n┌─────────────────────────────────────────────────┐");
+            System.out.println("│ Step 3: Issue Specification Design              │");
+            System.out.println("└─────────────────────────────────────────────────┘");
+            var allCreatedIssues = new ArrayList<CreateIssueTool.CreatedIssue>();
+
+            for (var item : prioritizedItems) {
+                System.out.println("\nDesigning spec for: " + item.title());
+                try {
+                    var specSession = new SpecDesignSession(client, model, repository, workingDir, dryRun);
+                    var issues = specSession.run(item);
+                    allCreatedIssues.addAll(issues);
+                    for (var issue : issues) {
+                        System.out.println("  Created Issue #" + issue.number() + ": " + issue.title());
+                    }
+                } catch (Exception e) {
+                    System.err.println("  ✗ Spec design failed: " + e.getMessage());
+                }
+            }
+
+            if (allCreatedIssues.isEmpty()) {
+                System.out.println("No issues created. Autonomous cycle complete.");
+                return 0;
+            }
+
+            // Step 4: Score & Refine
+            System.out.println("\n┌─────────────────────────────────────────────────┐");
+            System.out.println("│ Step 4: Quality Scoring & Auto-Refine           │");
+            System.out.println("└─────────────────────────────────────────────────┘");
             var qualifiedIssues = new ArrayList<CreateIssueTool.CreatedIssue>();
             var skippedIssues = new ArrayList<CreateIssueTool.CreatedIssue>();
 
-            for (var issue : createdIssues) {
+            for (var issue : allCreatedIssues) {
                 System.out.println("\nScoring Issue #" + issue.number() + ": " + issue.title());
                 try {
                     var scorerSession = new IssueQualityScorerSession(client, model, repository, workingDir);
                     var score = scorerSession.run(issue.number());
                     System.out.println("  Score: " + score.overallScore() + "/100");
 
-                    // Auto-refine loop: if below threshold, try to improve the issue
                     int refineAttempt = 0;
                     while (score.overallScore() < minScore && refineAttempt < maxRefineAttempts) {
                         refineAttempt++;
@@ -186,28 +184,30 @@ public class PipelineCommand implements Callable<Integer> {
                     }
 
                     if (score.overallScore() >= minScore) {
-                        System.out.println("  ✓ Qualified for implementation"
+                        System.out.println("  ✓ Qualified"
                             + (refineAttempt > 0 ? " (after " + refineAttempt + " refinement(s))" : ""));
                         qualifiedIssues.add(issue);
                     } else {
-                        System.out.println("  ✗ Below threshold (" + minScore + ") after " + refineAttempt + " refinement(s), skipping");
+                        System.out.println("  ✗ Below threshold (" + minScore + "), skipping");
                         skippedIssues.add(issue);
                     }
                 } catch (Exception e) {
-                    System.err.println("  ⚠ Scoring failed: " + e.getMessage() + " — proceeding with implementation");
+                    System.err.println("  ⚠ Scoring failed: " + e.getMessage() + " — proceeding anyway");
                     qualifiedIssues.add(issue);
                 }
             }
 
             if (qualifiedIssues.isEmpty()) {
-                System.out.println("\nNo issues passed quality threshold. Pipeline complete.");
+                System.out.println("\nNo issues passed quality threshold. Autonomous cycle complete.");
                 return 0;
             }
 
-            // Step 3: Implement qualified issues (with build/test verification loop)
-            System.out.println("\n=== Step 3: Implementing " + qualifiedIssues.size() + " qualified issue(s) (max-fix: " + maxFixAttempts + ") ===");
+            // Step 5: Implementation with verification loop
+            System.out.println("\n┌─────────────────────────────────────────────────┐");
+            System.out.println("│ Step 5: Implementation & Verification           │");
+            System.out.println("└─────────────────────────────────────────────────┘");
 
-            record ImplResult(CreateIssueTool.CreatedIssue issue, boolean success, int prNumber) {}
+            record ImplResult(CreateIssueTool.CreatedIssue issue, boolean success) {}
             var implResults = new ArrayList<ImplResult>();
 
             for (var issue : qualifiedIssues) {
@@ -226,10 +226,9 @@ public class PipelineCommand implements Callable<Integer> {
                     var implSession = new ImplementationSession(client, model, repository, workingDir, dryRun);
                     implSession.run(issue.number(), issue.title(), issueBody);
 
-                    // Step 3b: Verification loop — build and test, fix if needed
                     boolean verified = false;
                     for (int fixAttempt = 0; fixAttempt <= maxFixAttempts; fixAttempt++) {
-                        System.out.println("  🔍 Verifying build and tests"
+                        System.out.println("  Verifying build and tests"
                             + (fixAttempt > 0 ? " (fix attempt " + fixAttempt + "/" + maxFixAttempts + ")" : "") + "...");
 
                         try {
@@ -247,7 +246,6 @@ public class PipelineCommand implements Callable<Integer> {
                                 break;
                             }
 
-                            // Feed error context back to implementation session for self-correction
                             System.out.println("  ↻ Build/tests failed. Running self-correction...");
                             var errorContext = new StringBuilder();
                             if (!result.buildSuccess()) {
@@ -268,7 +266,7 @@ public class PipelineCommand implements Callable<Integer> {
                             }
 
                             String fixPrompt = issueBody + "\n\n---\n\n"
-                                + "# ⚠ Previous implementation has errors. Fix them:\n\n"
+                                + "# Previous implementation has errors. Fix them:\n\n"
                                 + errorContext;
 
                             var fixSession = new ImplementationSession(client, model, repository, workingDir, dryRun);
@@ -279,26 +277,28 @@ public class PipelineCommand implements Callable<Integer> {
                         }
                     }
 
-                    implResults.add(new ImplResult(issue, verified || dryRun, 0));
+                    implResults.add(new ImplResult(issue, verified || dryRun));
                     if (verified || dryRun) {
                         System.out.println("  ✓ Implementation succeeded.");
                     } else {
                         System.out.println("  ⚠ Implementation completed but verification failed.");
                     }
                 } catch (Exception e) {
-                    implResults.add(new ImplResult(issue, false, 0));
+                    implResults.add(new ImplResult(issue, false));
                     System.err.println("  ✗ Implementation failed: " + e.getMessage());
                 }
             }
 
-            // Step 4: Drift detection + code review for successful implementations
+            // Step 6: Drift detection + code review
             var successfulImpls = implResults.stream().filter(ImplResult::success).toList();
-            if (!successfulImpls.isEmpty() && !dryRun) {
-                System.out.println("\n=== Step 4: Running drift detection & code review ===");
+            if (!successfulImpls.isEmpty() && !dryRun && !skipReview) {
+                System.out.println("\n┌─────────────────────────────────────────────────┐");
+                System.out.println("│ Step 6: Drift Detection & Code Review           │");
+                System.out.println("└─────────────────────────────────────────────────┘");
+
                 for (var impl : successfulImpls) {
-                    System.out.println("\nChecking drift for Issue #" + impl.issue().number());
+                    System.out.println("\nChecking Issue #" + impl.issue().number());
                     try {
-                        // Find the PR for this issue
                         var prs = repository.queryPullRequests()
                             .head(repository.getOwnerName() + ":issue-" + impl.issue().number())
                             .base("main")
@@ -311,9 +311,8 @@ public class PipelineCommand implements Callable<Integer> {
 
                         int prNum = prs.get(0).getNumber();
 
-                        // Step 4a: Drift detection
                         var driftSession = new IntentDriftDetectorSession(client, model, repository, workingDir);
-                        var report = driftSession.run(prNum, impl.issue().number(), resolvedContext);
+                        var report = driftSession.run(prNum, impl.issue().number(), "autonomous improvement");
 
                         String icon = switch (report.verdict()) {
                             case "pass" -> "✓";
@@ -324,55 +323,48 @@ public class PipelineCommand implements Callable<Integer> {
                         System.out.println("  " + icon + " Drift: " + report.verdict().toUpperCase()
                             + " (" + report.drifts().size() + " drift(s))");
 
-                        // Step 4b: Self code review
-                        if (!skipReview) {
-                            System.out.println("  📝 Running self code review...");
-                            try {
-                                var reviewSession = new CodeReviewSession(client, model, repository, workingDir);
-                                var review = reviewSession.run(prNum);
+                        System.out.println("  Running self code review...");
+                        try {
+                            var reviewSession = new CodeReviewSession(client, model, repository, workingDir);
+                            var review = reviewSession.run(prNum);
 
-                                String reviewIcon = switch (review.verdict()) {
-                                    case "approve" -> "✓";
-                                    case "request_changes" -> "✗";
-                                    case "comment" -> "💬";
-                                    default -> "?";
-                                };
-                                long criticalCount = review.findings().stream()
-                                    .filter(f -> "critical".equals(f.severity())).count();
-                                long warningCount = review.findings().stream()
-                                    .filter(f -> "warning".equals(f.severity())).count();
+                            String reviewIcon = switch (review.verdict()) {
+                                case "approve" -> "✓";
+                                case "request_changes" -> "✗";
+                                case "comment" -> "💬";
+                                default -> "?";
+                            };
+                            long criticalCount = review.findings().stream()
+                                .filter(f -> "critical".equals(f.severity())).count();
+                            long warningCount = review.findings().stream()
+                                .filter(f -> "warning".equals(f.severity())).count();
 
-                                System.out.println("  " + reviewIcon + " Review: " + review.verdict().toUpperCase()
-                                    + " (" + criticalCount + " critical, " + warningCount + " warning, "
-                                    + review.findings().size() + " total)");
-
-                                if (!review.positives().isEmpty()) {
-                                    System.out.println("  Positives:");
-                                    for (var p : review.positives()) {
-                                        System.out.println("    + " + p);
-                                    }
-                                }
-                            } catch (Exception e) {
-                                System.err.println("  ⚠ Code review failed: " + e.getMessage());
-                            }
+                            System.out.println("  " + reviewIcon + " Review: " + review.verdict().toUpperCase()
+                                + " (" + criticalCount + " critical, " + warningCount + " warning)");
+                        } catch (Exception e) {
+                            System.err.println("  ⚠ Code review failed: " + e.getMessage());
                         }
                     } catch (Exception e) {
-                        System.err.println("  ⚠ Drift detection failed: " + e.getMessage());
+                        System.err.println("  ⚠ Post-implementation check failed: " + e.getMessage());
                     }
                 }
-            } else if (dryRun) {
-                System.out.println("\n=== Step 4: Drift detection & code review skipped (dry-run) ===");
             }
 
             // Summary
             long successCount = implResults.stream().filter(ImplResult::success).count();
             long failCount = implResults.stream().filter(r -> !r.success()).count();
 
-            System.out.println("\n=== Pipeline Summary ===");
-            System.out.println("Issues compiled:    " + createdIssues.size());
-            System.out.println("Issues qualified:   " + qualifiedIssues.size() + " (min-score: " + minScore + ")");
-            System.out.println("Issues skipped:     " + skippedIssues.size());
-            System.out.println("Implementations:    " + successCount + " succeeded, " + failCount + " failed");
+            System.out.println("\n┌─────────────────────────────────────────────────┐");
+            System.out.println("│ Autonomous Cycle Summary                        │");
+            System.out.println("├─────────────────────────────────────────────────┤");
+            System.out.println("│ Discoveries:      " + padRight(String.valueOf(discoveries.size()), 30) + "│");
+            System.out.println("│ Prioritized:      " + padRight(String.valueOf(prioritizedItems.size()), 30) + "│");
+            System.out.println("│ Issues created:   " + padRight(String.valueOf(allCreatedIssues.size()), 30) + "│");
+            System.out.println("│ Issues qualified: " + padRight(String.valueOf(qualifiedIssues.size()), 30) + "│");
+            System.out.println("│ Issues skipped:   " + padRight(String.valueOf(skippedIssues.size()), 30) + "│");
+            System.out.println("│ Implemented OK:   " + padRight(String.valueOf(successCount), 30) + "│");
+            System.out.println("│ Implemented FAIL: " + padRight(String.valueOf(failCount), 30) + "│");
+            System.out.println("└─────────────────────────────────────────────────┘");
         }
 
         return 0;
@@ -388,5 +380,9 @@ public class PipelineCommand implements Callable<Integer> {
         if (exitCode != 0) {
             throw new RuntimeException("Failed to checkout main branch");
         }
+    }
+
+    private static String padRight(String s, int n) {
+        return String.format("%-" + n + "s", s);
     }
 }
