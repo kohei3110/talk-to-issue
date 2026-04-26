@@ -86,7 +86,8 @@ public class GitHubContextSource implements ContextSource {
 
     private boolean matchesLabel(GHIssue issue) {
         if (filter == null) return true;
-        // Simple label-based filter: "label:xxx"
+        // Simple label-based filter: "label:bug", "label:enhancement", "label:todo" など
+        // 利用可能なラベル例: agent-ready, autonomous, bug, documentation, duplicate, enhancement, error_handling, good first issue, help wanted, invalid, question, security, test_gap, todo, wontfix
         if (filter.startsWith("label:")) {
             String labelName = filter.substring("label:".length()).trim();
             return issue.getLabels().stream()
