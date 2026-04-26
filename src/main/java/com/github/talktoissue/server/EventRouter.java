@@ -3,10 +3,12 @@ package com.github.talktoissue.server;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.copilot.sdk.CopilotClient;
-import com.github.talktoissue.IssueCompilerSession;
-import com.github.talktoissue.IssueQualityScorerSession;
+import com.github.talktoissue.CodeReviewSession;
 import com.github.talktoissue.ImplementationSession;
 import com.github.talktoissue.IntentDriftDetectorSession;
+import com.github.talktoissue.IssueCompilerSession;
+import com.github.talktoissue.IssueQualityScorerSession;
+import com.github.talktoissue.VerificationSession;
 import com.github.talktoissue.context.ContextAggregator;
 import com.github.talktoissue.context.ContextConfig;
 import org.kohsuke.github.GHRepository;
@@ -165,6 +167,44 @@ public class EventRouter {
 
             var implSession = new ImplementationSession(client, model, repo, workingDir, dryRun);
             implSession.run(issueNumber, issueTitle, issueBody);
+
+            // Verification loop
+            int maxFixAttempts = 3;
+            for (int attempt = 0; attempt <= maxFixAttempts; attempt++) {
+                System.out.println("[EventRouter] Verifying build/tests for issue #" + issueNumber
+                    + (attempt > 0 ? " (fix attempt " + attempt + ")" : ""));
+                try {
+                    var verifySession = new VerificationSession(client, model, workingDir, dryRun);
+                    var result = verifySession.run();
+
+                    if (result.buildSuccess() && result.testsSuccess()) {
+                        System.out.println("[EventRouter] Build/tests passed for issue #" + issueNumber);
+                        break;
+                    }
+
+                    if (attempt >= maxFixAttempts) {
+                        System.out.println("[EventRouter] Build/tests still failing after " + maxFixAttempts + " fix attempts");
+                        break;
+                    }
+
+                    // Self-correction: feed errors back
+                    var errorContext = new StringBuilder();
+                    if (!result.buildSuccess()) {
+                        errorContext.append("## Build Errors\n").append(result.buildOutput()).append("\n\n");
+                    }
+                    if (!result.testsSuccess()) {
+                        errorContext.append("## Test Failures\n").append(result.testOutput()).append("\n\n");
+                    }
+
+                    String fixPrompt = issueBody + "\n\n---\n\n# ⚠ Fix these errors:\n\n" + errorContext;
+                    var fixSession = new ImplementationSession(client, model, repo, workingDir, dryRun);
+                    fixSession.run(issueNumber, issueTitle, fixPrompt);
+                } catch (Exception e) {
+                    System.err.println("[EventRouter] Verification failed: " + e.getMessage());
+                    break;
+                }
+            }
+
             System.out.println("[EventRouter] Implementation complete for issue #" + issueNumber);
         }
     }
@@ -215,11 +255,26 @@ public class EventRouter {
             var ghIssue = repo.getIssue(issueNumber);
             String originalContext = ghIssue.getBody() != null ? ghIssue.getBody() : ghIssue.getTitle();
 
+            // Drift detection
             var driftSession = new IntentDriftDetectorSession(client, model, repo, workingDir);
             var report = driftSession.run(prNumber, issueNumber, originalContext);
 
             System.out.println("[EventRouter] Drift detection for PR #" + prNumber
                 + ": " + report.verdict() + " (" + report.drifts().size() + " drift(s))");
+
+            // Code review
+            try {
+                var reviewSession = new CodeReviewSession(client, model, repo, workingDir);
+                var review = reviewSession.run(prNumber);
+
+                long criticalCount = review.findings().stream()
+                    .filter(f -> "critical".equals(f.severity())).count();
+                System.out.println("[EventRouter] Code review for PR #" + prNumber
+                    + ": " + review.verdict() + " (" + criticalCount + " critical, "
+                    + review.findings().size() + " total findings)");
+            } catch (Exception e) {
+                System.err.println("[EventRouter] Code review failed for PR #" + prNumber + ": " + e.getMessage());
+            }
         }
     }
 }
