@@ -86,7 +86,13 @@ public class GitHubContextSource implements ContextSource {
 
     private boolean matchesLabel(GHIssue issue) {
         if (filter == null) return true;
-        // Simple label-based filter: "label:xxx"
+        /*
+         * Label-based filter: "label:xxx"
+         * If the filter string is in the form 'label:xxx', only issues/PRs that have a label named 'xxx' will match.
+         * Example: filter = "label:bug" → only issues/PRs with the 'bug' label are included.
+         * This is a simple filter for single-label matching. For future extensibility, more complex filter formats (e.g., multiple labels, logical operators) could be supported.
+         * Supported labels: agent-ready, autonomous, bug, documentation, duplicate, enhancement, error_handling, good first issue, help wanted, invalid, question, security, test_gap, todo, wontfix
+         */
         if (filter.startsWith("label:")) {
             String labelName = filter.substring("label:".length()).trim();
             return issue.getLabels().stream()
