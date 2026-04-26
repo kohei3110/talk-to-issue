@@ -48,6 +48,18 @@ public class ServeCommand implements Callable<Integer> {
             description = "Max concurrent pipeline executions. Default: ${DEFAULT-VALUE}")
     private int concurrency;
 
+    @Option(names = {"--autonomous-interval"}, defaultValue = "0",
+            description = "Autonomous cycle interval in minutes. 0 = disabled. Default: ${DEFAULT-VALUE}")
+    private int autonomousInterval;
+
+    @Option(names = {"--autonomous-max-issues"}, defaultValue = "3",
+            description = "Maximum issues per autonomous cycle. Default: ${DEFAULT-VALUE}")
+    private int autonomousMaxIssues;
+
+    @Option(names = {"--autonomous-min-score"}, defaultValue = "70",
+            description = "Minimum quality score for autonomous implementation. Default: ${DEFAULT-VALUE}")
+    private int autonomousMinScore;
+
     @Override
     public Integer call() throws Exception {
         String token = System.getenv("GITHUB_TOKEN");
@@ -81,6 +93,9 @@ public class ServeCommand implements Callable<Integer> {
         Scheduler scheduler = null;
         if (pollInterval > 0 && contextConfig != null) {
             scheduler = new Scheduler(contextConfig, repoFullName, workingDir, model, dryRun);
+        } else if (autonomousInterval > 0) {
+            // Create scheduler without contextConfig for autonomous-only mode
+            scheduler = new Scheduler(null, repoFullName, workingDir, model, dryRun);
         }
 
         // Graceful shutdown
@@ -99,16 +114,23 @@ public class ServeCommand implements Callable<Integer> {
 
         // Start
         server.start(port);
-        if (scheduler != null) {
+        if (scheduler != null && pollInterval > 0) {
             scheduler.start(pollInterval);
+        }
+        if (scheduler != null && autonomousInterval > 0) {
+            scheduler.startAutonomousCycle(autonomousInterval, autonomousMaxIssues, autonomousMinScore);
         }
 
         System.out.println("\n=== Agent Server Running ===");
         System.out.println("Repository: " + repoFullName);
         System.out.println("Trigger label: " + triggerLabel);
         System.out.println("Concurrency: " + concurrency);
-        if (scheduler != null) {
+        if (scheduler != null && pollInterval > 0) {
             System.out.println("Poll interval: " + pollInterval + " minutes");
+        }
+        if (autonomousInterval > 0) {
+            System.out.println("Autonomous cycle: every " + autonomousInterval + " minutes (max-issues: "
+                + autonomousMaxIssues + ", min-score: " + autonomousMinScore + ")");
         }
         System.out.println("\nTo forward webhooks locally, run:");
         System.out.println("  npx smee-client --url https://smee.io/<your-channel> --target http://localhost:" + port + "/webhooks/github");
