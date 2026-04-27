@@ -43,7 +43,7 @@ public class IntroCommand implements Callable<Integer> {
             }
             context = Files.readString(contextFile);
         } else {
-            // Auto-detect project context from working directory — gather comprehensive info
+            // Auto-detect project context from working directory  gather comprehensive info
             File workingDir = parent.getWorkingDir();
             if (workingDir == null) {
                 workingDir = new File(".");
@@ -80,7 +80,10 @@ public class IntroCommand implements Callable<Integer> {
                                     sb.append("  ").append(lines.get(i)).append("\n");
                                 }
                                 sb.append("  ...\n\n");
-                            } catch (Exception ignored) {}
+                            } catch (Exception e) {
+                                // Log the exception instead of ignoring it
+                                System.err.println("[WARN] Failed to read Java source file: " + p + ". Reason: " + e);
+                            }
                         });
                 }
             }
