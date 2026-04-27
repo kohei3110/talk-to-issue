@@ -11,8 +11,6 @@ import com.github.copilot.sdk.json.SessionHooks;
 import com.github.copilot.sdk.json.SystemMessageConfig;
 import com.github.copilot.sdk.SystemMessageMode;
 import com.github.talktoissue.tools.CommitAndPushTool;
-import com.github.talktoissue.tools.CreateBranchTool;
-import com.github.talktoissue.tools.CreatePullRequestTool;
 import com.github.talktoissue.tools.ExecuteCommandTool;
 import com.github.talktoissue.tools.ListDirectoryTool;
 import com.github.talktoissue.tools.ReadFileTool;
@@ -35,26 +33,24 @@ public class ImplementationSession {
            - Use `read_file` to read file contents (supports line ranges).
            - Use `search_code` to grep for patterns across the codebase.
         3. Implement the required changes using `write_file` and `execute_command`.
-        4. Once implementation is complete, follow this exact workflow:
-           a. Call `create_branch` with the issue number to create a feature branch.
-           b. Call `commit_and_push` with a descriptive commit message.
-           c. Call `create_pull_request` with a title, body describing your changes, and the issue number.
+        4. Once implementation is complete:
+           a. Use `execute_command` to run build and tests to verify your changes.
+           b. Call `commit_and_push` with a descriptive commit message referencing the issue number.
 
         IMPORTANT: Do NOT use built-in filesystem tools (glob, view, grep). Use the custom tools
         listed above instead: list_dir, read_file, search_code, write_file, execute_command.
+        IMPORTANT: Do NOT create branches. All changes go directly to the main branch.
 
         Guidelines:
         - Write clean, idiomatic code following the project's existing conventions.
         - Make minimal, focused changes — only what's needed to address the issue.
         - Test your changes if a test framework is set up (use execute_command to run tests).
         - The commit message should reference the issue number (e.g., "Fix #42: Add authentication endpoint").
-        - The PR body should explain what was changed and why.
         </rules>
         """;
 
     private final CopilotClient client;
     private final String model;
-    private final GHRepository repository;
     private final File workingDir;
     private final boolean dryRun;
 
@@ -62,7 +58,6 @@ public class ImplementationSession {
                                   File workingDir, boolean dryRun) {
         this.client = client;
         this.model = model;
-        this.repository = repository;
         this.workingDir = workingDir;
         this.dryRun = dryRun;
     }
@@ -73,9 +68,7 @@ public class ImplementationSession {
         var searchCodeTool = new SearchCodeTool(workingDir);
         var writeFileTool = new WriteFileTool(workingDir, dryRun);
         var executeCommandTool = new ExecuteCommandTool(workingDir, dryRun);
-        var createBranchTool = new CreateBranchTool(workingDir);
         var commitAndPushTool = new CommitAndPushTool(workingDir, dryRun);
-        var createPullRequestTool = new CreatePullRequestTool(repository, dryRun);
 
         var hooks = new SessionHooks()
             .setOnPostToolUse((input, invocation) -> {
@@ -99,9 +92,7 @@ public class ImplementationSession {
                     searchCodeTool.build(),
                     writeFileTool.build(),
                     executeCommandTool.build(),
-                    createBranchTool.build(),
-                    commitAndPushTool.build(),
-                    createPullRequestTool.build()
+                    commitAndPushTool.build()
                 ))
                 .setSystemMessage(new SystemMessageConfig()
                     .setMode(SystemMessageMode.APPEND)
@@ -119,7 +110,7 @@ public class ImplementationSession {
 
         String prompt = """
             以下のGitHub Issueの内容を実装してください。
-            コードベースを理解した上で、必要な変更を加え、ブランチ作成→コミット→PR作成まで行ってください。
+            コードベースを理解した上で、必要な変更を加え、テストを実行し、mainブランチに直接コミットしてください。
 
             ## Issue #%d: %s
 

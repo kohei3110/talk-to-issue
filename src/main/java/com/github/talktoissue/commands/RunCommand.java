@@ -21,7 +21,7 @@ import java.util.concurrent.Callable;
 
 @Command(
     name = "run",
-    description = "Full workflow: analyze transcript → create issues → implement → open PRs."
+    description = "Full workflow: analyze transcript → create issues → implement → commit to main."
 )
 public class RunCommand implements Callable<Integer> {
 
@@ -108,15 +108,13 @@ public class RunCommand implements Callable<Integer> {
                 return 0;
             }
 
-            System.out.println("\n=== Phase 2: Implementing issues and creating PRs ===");
+            System.out.println("\n=== Phase 2: Implementing issues ===" );
             int successCount = 0;
             int failCount = 0;
 
             for (var issue : createdIssues) {
                 System.out.println("\n--- Implementing Issue #" + issue.number() + ": " + issue.title() + " ---");
                 try {
-                    resetToMain(workingDir);
-
                     String issueBody;
                     if (dryRun) {
                         issueBody = "Dry-run issue body for: " + issue.title();
@@ -143,17 +141,5 @@ public class RunCommand implements Callable<Integer> {
         }
 
         return 0;
-    }
-
-    private void resetToMain(File workingDir) throws Exception {
-        var process = new ProcessBuilder("git", "checkout", "main")
-            .directory(workingDir)
-            .redirectErrorStream(true)
-            .start();
-        process.getInputStream().readAllBytes();
-        int exitCode = process.waitFor();
-        if (exitCode != 0) {
-            throw new RuntimeException("Failed to checkout main branch");
-        }
     }
 }
