@@ -1,7 +1,9 @@
 package com.github.talktoissue;
 
+import com.github.talktoissue.commands.AutonomousCommand;
 import com.github.talktoissue.commands.CompileCommand;
 import com.github.talktoissue.commands.DriftCommand;
+import com.github.talktoissue.commands.IntroCommand;
 import com.github.talktoissue.commands.PipelineCommand;
 import com.github.talktoissue.commands.RunCommand;
 import com.github.talktoissue.commands.ScoreCommand;
@@ -24,7 +26,9 @@ import java.io.IOException;
         ScoreCommand.class,
         DriftCommand.class,
         PipelineCommand.class,
-        ServeCommand.class
+        ServeCommand.class,
+        IntroCommand.class,
+        AutonomousCommand.class
     }
 )
 public class App implements Runnable {
