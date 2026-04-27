@@ -80,7 +80,9 @@ public class IntroCommand implements Callable<Integer> {
                                     sb.append("  ").append(lines.get(i)).append("\n");
                                 }
                                 sb.append("  ...\n\n");
-                            } catch (Exception ignored) {}
+                            } catch (Exception e) {
+                                e.printStackTrace();
+                            }
                         });
                 }
             }
