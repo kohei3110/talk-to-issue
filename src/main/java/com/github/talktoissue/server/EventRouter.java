@@ -3,9 +3,7 @@ package com.github.talktoissue.server;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.copilot.sdk.CopilotClient;
-import com.github.talktoissue.CodeReviewSession;
 import com.github.talktoissue.ImplementationSession;
-import com.github.talktoissue.IntentDriftDetectorSession;
 import com.github.talktoissue.IssueCompilerSession;
 import com.github.talktoissue.IssueQualityScorerSession;
 import com.github.talktoissue.VerificationSession;
@@ -23,7 +21,6 @@ import java.nio.file.Path;
  * Supported events:
  * - issues.labeled (trigger label) → quality score → implement
  * - issue_comment.created ("/pipeline" command) → full pipeline on issue context
- * - pull_request.opened → intent drift detection
  */
 public class EventRouter {
 
@@ -62,7 +59,6 @@ public class EventRouter {
             switch (eventType) {
                 case "issues" -> handleIssueEvent(action, root);
                 case "issue_comment" -> handleIssueCommentEvent(action, root);
-                case "pull_request" -> handlePullRequestEvent(action, root);
                 default -> System.out.println("[EventRouter] Ignoring event: " + eventType);
             }
         } catch (Exception e) {
@@ -109,36 +105,6 @@ public class EventRouter {
                 executeCompileFromIssue(issueNumber);
             } catch (Exception e) {
                 throw new RuntimeException("Pipeline failed for issue #" + issueNumber, e);
-            }
-        });
-    }
-
-    private void handlePullRequestEvent(String action, JsonNode root) {
-        if (!"opened".equals(action) && !"synchronize".equals(action)) return;
-
-        int prNumber = root.path("pull_request").path("number").asInt();
-        String prBranch = root.path("pull_request").path("head").path("ref").asText("");
-
-        // Extract issue number from branch name (convention: issue-{number})
-        if (!prBranch.startsWith("issue-")) {
-            System.out.println("[EventRouter] PR #" + prNumber + " branch '" + prBranch + "' doesn't follow issue-{N} convention, skipping drift check");
-            return;
-        }
-
-        int issueNumber;
-        try {
-            issueNumber = Integer.parseInt(prBranch.substring(6));
-        } catch (NumberFormatException e) {
-            return;
-        }
-
-        System.out.println("[EventRouter] PR #" + prNumber + " opened for issue #" + issueNumber + ", running drift detection");
-
-        workQueue.submit(repoFullName, "drift-pr-" + prNumber, () -> {
-            try {
-                executeDriftDetection(prNumber, issueNumber);
-            } catch (Exception e) {
-                throw new RuntimeException("Drift detection failed for PR #" + prNumber, e);
             }
         });
     }
@@ -241,40 +207,6 @@ public class EventRouter {
             var compilerSession = new IssueCompilerSession(client, model, repo, workingDir, dryRun);
             var issues = compilerSession.run(resolvedContext);
             System.out.println("[EventRouter] Compiled " + issues.size() + " issue(s) from issue #" + issueNumber);
-        }
-    }
-
-    private void executeDriftDetection(int prNumber, int issueNumber) throws Exception {
-        String token = System.getenv("GITHUB_TOKEN");
-        GitHub gitHub = new GitHubBuilder().withOAuthToken(token).build();
-        GHRepository repo = gitHub.getRepository(repoFullName);
-
-        try (var client = new CopilotClient()) {
-            client.start().get();
-
-            var ghIssue = repo.getIssue(issueNumber);
-            String originalContext = ghIssue.getBody() != null ? ghIssue.getBody() : ghIssue.getTitle();
-
-            // Drift detection
-            var driftSession = new IntentDriftDetectorSession(client, model, repo, workingDir);
-            var report = driftSession.run(prNumber, issueNumber, originalContext);
-
-            System.out.println("[EventRouter] Drift detection for PR #" + prNumber
-                + ": " + report.verdict() + " (" + report.drifts().size() + " drift(s))");
-
-            // Code review
-            try {
-                var reviewSession = new CodeReviewSession(client, model, repo, workingDir);
-                var review = reviewSession.run(prNumber);
-
-                long criticalCount = review.findings().stream()
-                    .filter(f -> "critical".equals(f.severity())).count();
-                System.out.println("[EventRouter] Code review for PR #" + prNumber
-                    + ": " + review.verdict() + " (" + criticalCount + " critical, "
-                    + review.findings().size() + " total findings)");
-            } catch (Exception e) {
-                System.err.println("[EventRouter] Code review failed for PR #" + prNumber + ": " + e.getMessage());
-            }
         }
     }
 }

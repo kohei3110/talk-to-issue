@@ -132,7 +132,6 @@ public class Scheduler {
 
                 // Step 1: Analysis
                 System.out.println("[Autonomous] Step 1: Analyzing codebase...");
-                resetToMain();
                 var analysisSession = new CodebaseAnalysisSession(client, model, workingDir, null);
                 var discoveries = analysisSession.run();
                 System.out.println("[Autonomous] Found " + discoveries.size() + " improvement(s)");
@@ -197,7 +196,6 @@ public class Scheduler {
                 System.out.println("[Autonomous] Step 5: Implementing " + qualifiedIssues.size() + " issue(s)...");
                 for (var issue : qualifiedIssues) {
                     try {
-                        resetToMain();
                         String issueBody;
                         if (dryRun) {
                             issueBody = "Dry-run: " + issue.title();
@@ -224,18 +222,6 @@ public class Scheduler {
             }
         } catch (Exception e) {
             System.err.println("[Autonomous] Cycle failed: " + e.getMessage());
-        }
-    }
-
-    private void resetToMain() throws Exception {
-        var process = new ProcessBuilder("git", "checkout", "main")
-            .directory(workingDir)
-            .redirectErrorStream(true)
-            .start();
-        process.getInputStream().readAllBytes();
-        int exitCode = process.waitFor();
-        if (exitCode != 0) {
-            throw new RuntimeException("Failed to checkout main branch");
         }
     }
 }

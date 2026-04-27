@@ -2,9 +2,7 @@ package com.github.talktoissue.commands;
 
 import com.github.copilot.sdk.CopilotClient;
 import com.github.talktoissue.App;
-import com.github.talktoissue.CodeReviewSession;
 import com.github.talktoissue.ImplementationSession;
-import com.github.talktoissue.IntentDriftDetectorSession;
 import com.github.talktoissue.IssueCompilerSession;
 import com.github.talktoissue.IssueQualityScorerSession;
 import com.github.talktoissue.IssueRefineSession;
@@ -29,7 +27,7 @@ import java.util.concurrent.Callable;
 
     @Command(
     name = "pipeline",
-    description = "Full pipeline: compile → score (with auto-refine) → implement (with verification) → drift detection → code review."
+    description = "Full pipeline: compile → score (with auto-refine) → implement (with verification)."
 )
 public class PipelineCommand implements Callable<Integer> {
 
@@ -67,10 +65,6 @@ public class PipelineCommand implements Callable<Integer> {
     @Option(names = {"--max-fix-attempts"}, defaultValue = "3",
             description = "Maximum attempts to fix build/test failures after implementation. Default: ${DEFAULT-VALUE}")
     private int maxFixAttempts;
-
-    @Option(names = {"--skip-review"},
-            description = "Skip the self code review step")
-    private boolean skipReview;
 
     @Override
     public Integer call() throws Exception {
@@ -207,14 +201,12 @@ public class PipelineCommand implements Callable<Integer> {
             // Step 3: Implement qualified issues (with build/test verification loop)
             System.out.println("\n=== Step 3: Implementing " + qualifiedIssues.size() + " qualified issue(s) (max-fix: " + maxFixAttempts + ") ===");
 
-            record ImplResult(CreateIssueTool.CreatedIssue issue, boolean success, int prNumber) {}
+            record ImplResult(CreateIssueTool.CreatedIssue issue, boolean success) {}
             var implResults = new ArrayList<ImplResult>();
 
             for (var issue : qualifiedIssues) {
                 System.out.println("\n--- Implementing Issue #" + issue.number() + ": " + issue.title() + " ---");
                 try {
-                    resetToMain(workingDir);
-
                     String issueBody;
                     if (dryRun) {
                         issueBody = "Dry-run issue body for: " + issue.title();
@@ -279,89 +271,16 @@ public class PipelineCommand implements Callable<Integer> {
                         }
                     }
 
-                    implResults.add(new ImplResult(issue, verified || dryRun, 0));
+                    implResults.add(new ImplResult(issue, verified || dryRun));
                     if (verified || dryRun) {
                         System.out.println("  ✓ Implementation succeeded.");
                     } else {
                         System.out.println("  ⚠ Implementation completed but verification failed.");
                     }
                 } catch (Exception e) {
-                    implResults.add(new ImplResult(issue, false, 0));
+                    implResults.add(new ImplResult(issue, false));
                     System.err.println("  ✗ Implementation failed: " + e.getMessage());
                 }
-            }
-
-            // Step 4: Drift detection + code review for successful implementations
-            var successfulImpls = implResults.stream().filter(ImplResult::success).toList();
-            if (!successfulImpls.isEmpty() && !dryRun) {
-                System.out.println("\n=== Step 4: Running drift detection & code review ===");
-                for (var impl : successfulImpls) {
-                    System.out.println("\nChecking drift for Issue #" + impl.issue().number());
-                    try {
-                        // Find the PR for this issue
-                        var prs = repository.queryPullRequests()
-                            .head(repository.getOwnerName() + ":issue-" + impl.issue().number())
-                            .base("main")
-                            .list().toList();
-
-                        if (prs.isEmpty()) {
-                            System.out.println("  ⚠ No PR found for branch issue-" + impl.issue().number());
-                            continue;
-                        }
-
-                        int prNum = prs.get(0).getNumber();
-
-                        // Step 4a: Drift detection
-                        var driftSession = new IntentDriftDetectorSession(client, model, repository, workingDir);
-                        var report = driftSession.run(prNum, impl.issue().number(), resolvedContext);
-
-                        String icon = switch (report.verdict()) {
-                            case "pass" -> "✓";
-                            case "warn" -> "⚠";
-                            case "fail" -> "✗";
-                            default -> "?";
-                        };
-                        System.out.println("  " + icon + " Drift: " + report.verdict().toUpperCase()
-                            + " (" + report.drifts().size() + " drift(s))");
-
-                        // Step 4b: Self code review
-                        if (!skipReview) {
-                            System.out.println("  📝 Running self code review...");
-                            try {
-                                var reviewSession = new CodeReviewSession(client, model, repository, workingDir);
-                                var review = reviewSession.run(prNum);
-
-                                String reviewIcon = switch (review.verdict()) {
-                                    case "approve" -> "✓";
-                                    case "request_changes" -> "✗";
-                                    case "comment" -> "💬";
-                                    default -> "?";
-                                };
-                                long criticalCount = review.findings().stream()
-                                    .filter(f -> "critical".equals(f.severity())).count();
-                                long warningCount = review.findings().stream()
-                                    .filter(f -> "warning".equals(f.severity())).count();
-
-                                System.out.println("  " + reviewIcon + " Review: " + review.verdict().toUpperCase()
-                                    + " (" + criticalCount + " critical, " + warningCount + " warning, "
-                                    + review.findings().size() + " total)");
-
-                                if (!review.positives().isEmpty()) {
-                                    System.out.println("  Positives:");
-                                    for (var p : review.positives()) {
-                                        System.out.println("    + " + p);
-                                    }
-                                }
-                            } catch (Exception e) {
-                                System.err.println("  ⚠ Code review failed: " + e.getMessage());
-                            }
-                        }
-                    } catch (Exception e) {
-                        System.err.println("  ⚠ Drift detection failed: " + e.getMessage());
-                    }
-                }
-            } else if (dryRun) {
-                System.out.println("\n=== Step 4: Drift detection & code review skipped (dry-run) ===");
             }
 
             // Summary
@@ -376,17 +295,5 @@ public class PipelineCommand implements Callable<Integer> {
         }
 
         return 0;
-    }
-
-    private void resetToMain(File workingDir) throws Exception {
-        var process = new ProcessBuilder("git", "checkout", "main")
-            .directory(workingDir)
-            .redirectErrorStream(true)
-            .start();
-        process.getInputStream().readAllBytes();
-        int exitCode = process.waitFor();
-        if (exitCode != 0) {
-            throw new RuntimeException("Failed to checkout main branch");
-        }
     }
 }

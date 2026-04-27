@@ -87,14 +87,14 @@ class EventRouterTest {
     }
 
     @Test
-    void handlesPROpenedWithIssueBranch() {
+    void ignoresPullRequestEvent() {
         var router = createRouter();
         String payload = """
             {"action": "opened",
              "pull_request": {"number": 5, "head": {"ref": "issue-42"}}}
             """;
         router.route("pull_request", payload);
-        verify(workQueue).submit(eq("owner/repo"), eq("drift-pr-5"), any());
+        verifyNoInteractions(workQueue);
     }
 
     @Test
@@ -109,14 +109,14 @@ class EventRouterTest {
     }
 
     @Test
-    void handlesPRSynchronize() {
+    void ignoresPRSynchronize() {
         var router = createRouter();
         String payload = """
             {"action": "synchronize",
              "pull_request": {"number": 7, "head": {"ref": "issue-99"}}}
             """;
         router.route("pull_request", payload);
-        verify(workQueue).submit(eq("owner/repo"), eq("drift-pr-7"), any());
+        verifyNoInteractions(workQueue);
     }
 
     @Test

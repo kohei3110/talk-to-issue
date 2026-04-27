@@ -2,10 +2,8 @@ package com.github.talktoissue.commands;
 
 import com.github.copilot.sdk.CopilotClient;
 import com.github.talktoissue.App;
-import com.github.talktoissue.CodeReviewSession;
 import com.github.talktoissue.CodebaseAnalysisSession;
 import com.github.talktoissue.ImplementationSession;
-import com.github.talktoissue.IntentDriftDetectorSession;
 import com.github.talktoissue.IssueQualityScorerSession;
 import com.github.talktoissue.IssueRefineSession;
 import com.github.talktoissue.PrioritizationSession;
@@ -48,10 +46,6 @@ public class AutonomousCommand implements Callable<Integer> {
             description = "Maximum attempts to fix build/test failures. Default: ${DEFAULT-VALUE}")
     private int maxFixAttempts;
 
-    @Option(names = {"--skip-review"},
-            description = "Skip the self code review step")
-    private boolean skipReview;
-
     @Option(names = {"--categories"}, split = ",",
             description = "Limit analysis to specific categories: todo,test_gap,security,tech_debt,error_handling,documentation")
     private List<String> categories;
@@ -93,7 +87,6 @@ public class AutonomousCommand implements Callable<Integer> {
                                    org.kohsuke.github.GHRepository repository, File workingDir) throws Exception {
         // Step 1: Codebase Analysis
         System.out.println("\n=== Step 1: Codebase Analysis ===");
-        resetToMain(workingDir);
         var analysisSession = new CodebaseAnalysisSession(client, model, workingDir, categories);
         var discoveries = analysisSession.run();
         System.out.println("Discovered " + discoveries.size() + " improvement opportunity(ies)");
@@ -186,7 +179,6 @@ public class AutonomousCommand implements Callable<Integer> {
         for (var issue : qualifiedIssues) {
             System.out.println("\n--- Implementing Issue #" + issue.number() + ": " + issue.title() + " ---");
             try {
-                resetToMain(workingDir);
 
                 String issueBody;
                 if (dryRun) {
@@ -250,41 +242,6 @@ public class AutonomousCommand implements Callable<Integer> {
             }
         }
 
-        // Step 6: Drift Detection & Code Review
-        if (!skipReview) {
-            var successfulImpls = implResults.stream().filter(ImplResult::success).toList();
-            if (!successfulImpls.isEmpty() && !dryRun) {
-                System.out.println("\n=== Step 6: Drift Detection & Code Review ===");
-                for (var impl : successfulImpls) {
-                    try {
-                        var prs = repository.queryPullRequests()
-                            .head(repository.getOwnerName() + ":issue-" + impl.issue().number())
-                            .base("main")
-                            .list().toList();
-
-                        if (prs.isEmpty()) {
-                            System.out.println("  ⚠ No PR found for issue-" + impl.issue().number());
-                            continue;
-                        }
-
-                        int prNum = prs.get(0).getNumber();
-
-                        var driftSession = new IntentDriftDetectorSession(client, model, repository, workingDir);
-                        var report = driftSession.run(prNum, impl.issue().number(), null);
-                        System.out.println("  Drift: " + report.verdict().toUpperCase()
-                            + " (" + report.drifts().size() + " drift(s))");
-
-                        var reviewSession = new CodeReviewSession(client, model, repository, workingDir);
-                        var review = reviewSession.run(prNum);
-                        System.out.println("  Review: " + review.verdict().toUpperCase()
-                            + " (" + review.findings().size() + " finding(s))");
-                    } catch (Exception e) {
-                        System.err.println("  ⚠ Review failed for Issue #" + impl.issue().number() + ": " + e.getMessage());
-                    }
-                }
-            }
-        }
-
         // Summary
         long successCount = implResults.stream().filter(ImplResult::success).count();
         long failCount = implResults.stream().filter(r -> !r.success()).count();
@@ -297,17 +254,5 @@ public class AutonomousCommand implements Callable<Integer> {
         System.out.println("Implementations:    " + successCount + " succeeded, " + failCount + " failed");
 
         return 0;
-    }
-
-    private void resetToMain(File workingDir) throws Exception {
-        var process = new ProcessBuilder("git", "checkout", "main")
-            .directory(workingDir)
-            .redirectErrorStream(true)
-            .start();
-        process.getInputStream().readAllBytes();
-        int exitCode = process.waitFor();
-        if (exitCode != 0) {
-            throw new RuntimeException("Failed to checkout main branch");
-        }
     }
 }
