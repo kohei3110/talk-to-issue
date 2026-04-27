@@ -3,6 +3,7 @@ package com.github.talktoissue;
 import com.github.talktoissue.commands.AutonomousCommand;
 import com.github.talktoissue.commands.CompileCommand;
 import com.github.talktoissue.commands.DriftCommand;
+import com.github.talktoissue.commands.ImproveCommand;
 import com.github.talktoissue.commands.IntroCommand;
 import com.github.talktoissue.commands.PipelineCommand;
 import com.github.talktoissue.commands.RunCommand;
@@ -28,12 +29,13 @@ import java.io.IOException;
         PipelineCommand.class,
         ServeCommand.class,
         IntroCommand.class,
-        AutonomousCommand.class
+        AutonomousCommand.class,
+        ImproveCommand.class
     }
 )
 public class App implements Runnable {
 
-    @Option(names = {"-r", "--repo"}, required = true,
+    @Option(names = {"-r", "--repo"},
             description = "Target GitHub repository (owner/repo format)")
     private String repoFullName;
 
@@ -51,6 +53,10 @@ public class App implements Runnable {
 
     public String getRepoFullName() {
         return repoFullName;
+    }
+
+    public boolean isRepoRequired() {
+        return repoFullName == null || repoFullName.isBlank();
     }
 
     public File getWorkingDir() {

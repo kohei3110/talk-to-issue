@@ -43,6 +43,11 @@ public class DriftCommand implements Callable<Integer> {
             return 1;
         }
 
+        if (parent.isRepoRequired()) {
+            System.err.println("Error: --repo is required for the drift command.");
+            return 1;
+        }
+
         if (transcriptFile != null && !Files.exists(transcriptFile)) {
             System.err.println("Error: Transcript file not found: " + transcriptFile);
             return 1;

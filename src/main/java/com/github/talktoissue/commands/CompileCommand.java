@@ -80,6 +80,11 @@ public class CompileCommand implements Callable<Integer> {
             return 1;
         }
 
+        if (parent.isRepoRequired()) {
+            System.err.println("Error: --repo is required for the compile command.");
+            return 1;
+        }
+
         File workingDir = parent.getWorkingDir();
         if (workingDir == null || !workingDir.isDirectory()) {
             System.err.println("Error: --working-dir is required for the compile command.");
