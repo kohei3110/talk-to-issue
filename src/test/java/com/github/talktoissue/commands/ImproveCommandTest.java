@@ -33,8 +33,17 @@ class ImproveCommandTest {
     @Test
     void parsesCategoriesOption_todo() {
         var cmd = new CommandLine(new App());
+        // 正常系: todoのみ
         var parseResult = cmd.parseArgs("improve", "--target-dir", "/tmp/project", "--categories", "todo");
         assertTrue(parseResult.hasSubcommand());
+        assertEquals("improve", parseResult.subcommand().commandSpec().name());
+        // 異常系: 不正カテゴリ
+        var ex = assertThrows(CommandLine.ParameterException.class, () ->
+            cmd.parseArgs("improve", "--target-dir", "/tmp/project", "--categories", "unknown_category"));
+        assertTrue(ex.getMessage().contains("unknown_category"));
+        // 複数カテゴリ
+        var parseResult2 = cmd.parseArgs("improve", "--target-dir", "/tmp/project", "--categories", "todo,security");
+        assertTrue(parseResult2.hasSubcommand());
     }
 
     @Test

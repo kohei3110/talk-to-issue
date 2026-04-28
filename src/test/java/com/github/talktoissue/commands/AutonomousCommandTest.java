@@ -10,8 +10,17 @@ class AutonomousCommandTest {
     @Test
     void parsesCategoriesOption_todo() {
         var cmd = new CommandLine(new App());
+        // 正常系: todoのみ
         var parseResult = cmd.parseArgs("autonomous", "--categories", "todo");
         assertTrue(parseResult.hasSubcommand());
+        assertEquals("autonomous", parseResult.subcommand().commandSpec().name());
+        // 異常系: 不正カテゴリ
+        var ex = assertThrows(CommandLine.ParameterException.class, () ->
+            cmd.parseArgs("autonomous", "--categories", "unknown_category"));
+        assertTrue(ex.getMessage().contains("unknown_category"));
+        // 複数カテゴリ
+        var parseResult2 = cmd.parseArgs("autonomous", "--categories", "todo,security");
+        assertTrue(parseResult2.hasSubcommand());
     }
 
     @Test
