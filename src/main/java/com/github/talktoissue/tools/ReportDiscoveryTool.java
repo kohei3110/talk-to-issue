@@ -7,8 +7,25 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * Tool for reporting discovered improvement opportunities in the codebase.
+ * <p>
+ * This tool defines the structure and reporting mechanism for various categories of improvement
+ * opportunities, such as technical debt, test gaps, security issues, and more. It exposes a public API
+ * for retrieving discovered items and building a Copilot SDK ToolDefinition for integration.
+ */
 public class ReportDiscoveryTool {
 
+    /**
+     * Represents a discovered improvement opportunity in the codebase.
+     *
+     * @param category         Category of the improvement opportunity (e.g., todo, test_gap, security, tech_debt, error_handling, documentation)
+     * @param title            Concise title of the improvement opportunity
+     * @param description      Detailed description of what needs to be improved and why
+     * @param severity         Severity of the issue (high: critical, medium: should fix, low: nice to have)
+     * @param affectedFiles    List of file paths affected by this issue
+     * @param estimatedEffort  Estimated effort to address the issue (small: <1h, medium: 1-4h, large: >4h)
+     */
     public record Discovery(
         String category,
         String title,
@@ -20,10 +37,24 @@ public class ReportDiscoveryTool {
 
     private volatile List<Discovery> discoveries = List.of();
 
+    /**
+     * Returns the list of discovered improvement opportunities.
+     *
+     * @return List of {@link Discovery} objects representing improvement opportunities
+     */
     public List<Discovery> getDiscoveries() {
         return discoveries;
     }
 
+    /**
+     * Builds the Copilot SDK ToolDefinition for reporting discovered improvement opportunities.
+     * <p>
+     * The returned ToolDefinition can be registered with the Copilot SDK to enable reporting of
+     * discovered issues. When invoked, it updates the internal list of discoveries and prints a summary
+     * to standard output.
+     *
+     * @return ToolDefinition for the report_discovery tool
+     */
     @SuppressWarnings("unchecked")
     public ToolDefinition build() {
         return ToolDefinition.createSkipPermission(
