@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class WebhookValidatorTest {
 
-    private static final String SECRET = "test-webhook-secret";
+    private static final String SECRET = getSecret();
 
     private final WebhookValidator validator = new WebhookValidator(SECRET);
 
@@ -94,5 +94,13 @@ class WebhookValidatorTest {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private static String getSecret() {
+        String secret = System.getenv("TEST_WEBHOOK_SECRET");
+        if (secret == null || secret.isEmpty()) {
+            throw new IllegalStateException("Environment variable TEST_WEBHOOK_SECRET must be set for tests.");
+        }
+        return secret;
     }
 }
