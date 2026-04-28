@@ -6,10 +6,45 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * Tool for reporting code review results, including findings and positive aspects.
+ *
+ * <p>
+ * <b>Finding Categories:</b>
+ * <ul>
+ *   <li><b>security</b>: Security vulnerabilities or unsafe practices.</li>
+ *   <li><b>bug</b>: Functional bugs or incorrect behavior.</li>
+ *   <li><b>performance</b>: Performance bottlenecks or inefficiencies.</li>
+ *   <li><b>error_handling</b>: Inadequate or missing error handling.</li>
+ *   <li><b>edge_case</b>: Issues related to unhandled or rare edge cases.</li>
+ *   <li><b>style</b>: Code style, formatting, or naming issues (minor, non-blocking).</li>
+ *   <li><b>maintainability</b>: Code that is hard to understand, maintain, or extend.</li>
+ * </ul>
+ *
+ * Only the above categories are currently supported. Remove or update any references to unused categories.
+ */
 public class ReportCodeReviewTool {
 
+    /**
+     * Represents a single finding from the code review.
+     *
+     * @param severity   Severity of the finding (critical, warning, suggestion)
+     * @param category   Category of the finding (see Finding Categories above)
+     * @param file       Affected file path
+     * @param line       Line number (approximate, 0 if unknown)
+     * @param description Detailed description of the issue
+     * @param suggestion Suggested fix or improvement
+     */
     public record ReviewFinding(String severity, String category, String file, int line, String description, String suggestion) {}
 
+    /**
+     * Represents the overall code review result.
+     *
+     * @param verdict   Overall verdict (approve, request_changes, comment)
+     * @param summary   Brief summary of the review findings
+     * @param findings  List of review findings
+     * @param positives Positive aspects of the implementation
+     */
     public record CodeReview(
         String verdict,
         String summary,
@@ -43,14 +78,15 @@ public class ReportCodeReviewTool {
                                 "description", "Severity: critical (must fix), warning (should fix), suggestion (nice to have)"),
                             "category", Map.of("type", "string", "enum",
                                 List.of("security", "bug", "performance", "error_handling", "edge_case", "style", "maintainability"),
-                                "description", "Category of the finding"),
+                                "description", "Category of the finding (see Javadoc for details)"),
                             "file", Map.of("type", "string", "description", "Affected file path"),
                             "line", Map.of("type", "integer", "description", "Line number (approximate, 0 if unknown)"),
                             "description", Map.of("type", "string", "description", "Detailed description of the issue"),
                             "suggestion", Map.of("type", "string", "description", "Suggested fix or improvement")
                         ),
                         "required", List.of("severity", "category", "file", "description", "suggestion")
-                    ), "description", "List of review findings"),
+                    ), "description", "List of review findings")
+                    ,
                     "positives", Map.of("type", "array", "items", Map.of("type", "string"),
                         "description", "Positive aspects of the implementation worth noting")
                 ),

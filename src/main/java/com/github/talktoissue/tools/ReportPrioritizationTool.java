@@ -7,8 +7,25 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * Tool for reporting the prioritized list of improvement opportunities to implement.
+ *
+ * <p>
+ * <b>Improvement Categories:</b> See ReportDiscoveryTool for the canonical list and descriptions.
+ * The category field should match one of: todo, test_gap, security, tech_debt, error_handling, documentation.
+ * </p>
+ */
 public class ReportPrioritizationTool {
 
+    /**
+     * Represents a prioritized improvement item.
+     *
+     * @param title         Title of the improvement item
+     * @param description   Detailed description including what to implement
+     * @param category      Category from the original discovery (see ReportDiscoveryTool)
+     * @param priorityRank  Priority rank (1 = highest priority)
+     * @param rationale     Why this item was prioritized — impact, risk, effort analysis
+     */
     public record PrioritizedItem(
         String title,
         String description,
@@ -40,7 +57,7 @@ public class ReportPrioritizationTool {
                             "description", Map.of("type", "string",
                                 "description", "Detailed description including what to implement"),
                             "category", Map.of("type", "string",
-                                "description", "Category from the original discovery"),
+                                "description", "Category from the original discovery (see ReportDiscoveryTool)"),
                             "priority_rank", Map.of("type", "integer",
                                 "description", "Priority rank (1 = highest priority)"),
                             "rationale", Map.of("type", "string",

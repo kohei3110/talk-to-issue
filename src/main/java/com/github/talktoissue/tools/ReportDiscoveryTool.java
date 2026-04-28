@@ -13,13 +13,26 @@ import java.util.concurrent.CompletableFuture;
  * This tool defines the structure and reporting mechanism for various categories of improvement
  * opportunities, such as technical debt, test gaps, security issues, and more. It exposes a public API
  * for retrieving discovered items and building a Copilot SDK ToolDefinition for integration.
+ *
+ * <p>
+ * <b>Improvement Categories:</b>
+ * <ul>
+ *   <li><b>todo</b>: Unimplemented features, unfinished code, or explicit TODOs left in the codebase.</li>
+ *   <li><b>test_gap</b>: Missing or insufficient test coverage for important logic or edge cases.</li>
+ *   <li><b>security</b>: Security vulnerabilities, unsafe coding practices, or missing security controls.</li>
+ *   <li><b>tech_debt</b>: Technical debt, such as poor structure, outdated dependencies, or code that is hard to maintain.</li>
+ *   <li><b>error_handling</b>: Inadequate or missing error handling, lack of validation, or improper exception management.</li>
+ *   <li><b>documentation</b>: Missing, outdated, or unclear documentation, including code comments and API docs.</li>
+ * </ul>
+ *
+ * Only the above categories are currently supported. Remove or update any references to unused categories.
  */
 public class ReportDiscoveryTool {
 
     /**
      * Represents a discovered improvement opportunity in the codebase.
      *
-     * @param category         Category of the improvement opportunity (e.g., todo, test_gap, security, tech_debt, error_handling, documentation)
+     * @param category         Category of the improvement opportunity (see Improvement Categories above)
      * @param title            Concise title of the improvement opportunity
      * @param description      Detailed description of what needs to be improved and why
      * @param severity         Severity of the issue (high: critical, medium: should fix, low: nice to have)
@@ -53,6 +66,9 @@ public class ReportDiscoveryTool {
      * discovered issues. When invoked, it updates the internal list of discoveries and prints a summary
      * to standard output.
      *
+     * <p>
+     * <b>Supported categories:</b> todo, test_gap, security, tech_debt, error_handling, documentation
+     *
      * @return ToolDefinition for the report_discovery tool
      */
     @SuppressWarnings("unchecked")
@@ -69,7 +85,7 @@ public class ReportDiscoveryTool {
                         "properties", Map.of(
                             "category", Map.of("type", "string", "enum",
                                 List.of("todo", "test_gap", "security", "tech_debt", "error_handling", "documentation"),
-                                "description", "Category of the improvement opportunity"),
+                                "description", "Category of the improvement opportunity (see Javadoc for details)"),
                             "title", Map.of("type", "string",
                                 "description", "Concise title of the improvement opportunity"),
                             "description", Map.of("type", "string",
