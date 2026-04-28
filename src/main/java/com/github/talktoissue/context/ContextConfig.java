@@ -23,7 +23,7 @@ import java.util.Map;
  *     path: ./meeting-notes.txt
  *   - type: workiq
  *     query: "直近1週間の会議を要約して"
- *     tenant-id: "xxx"
+ *     tenant-id: ${TENANT_ID}
  *   - type: github
  *     scope: issues
  *     filter: "label:needs-triage"
