@@ -10,12 +10,12 @@ import java.util.concurrent.CompletableFuture;
  * Tool for reporting code review results, including findings and positive aspects.
  *
  * <p>
- * <b>Finding Categories:</b>
+ * <b>Review Finding Categories:</b>
  * <ul>
  *   <li><b>security</b>: Security vulnerabilities or unsafe practices.</li>
  *   <li><b>bug</b>: Functional bugs or incorrect behavior.</li>
  *   <li><b>performance</b>: Performance bottlenecks or inefficiencies.</li>
- *   <li><b>error_handling</b>: Inadequate or missing error handling.</li>
+ *   <li><b>error_handling</b>: Inadequate or missing error handling, validation, or exception management.</li>
  *   <li><b>edge_case</b>: Issues related to unhandled or rare edge cases.</li>
  *   <li><b>style</b>: Code style, formatting, or naming issues (minor, non-blocking).</li>
  *   <li><b>maintainability</b>: Code that is hard to understand, maintain, or extend.</li>
@@ -29,7 +29,7 @@ public class ReportCodeReviewTool {
      * Represents a single finding from the code review.
      *
      * @param severity   Severity of the finding (critical, warning, suggestion)
-     * @param category   Category of the finding (see Finding Categories above)
+     * @param category   Category of the finding (see Review Finding Categories above)
      * @param file       Affected file path
      * @param line       Line number (approximate, 0 if unknown)
      * @param description Detailed description of the issue
