@@ -31,10 +31,44 @@ class ImproveCommandTest {
     }
 
     @Test
-    void parsesCategoriesOption() {
+    void parsesCategoriesOption_todo() {
         var cmd = new CommandLine(new App());
-        var parseResult = cmd.parseArgs("improve", "--target-dir", "/tmp/project",
-                "--categories", "todo,test_gap,security");
+        var parseResult = cmd.parseArgs("improve", "--target-dir", "/tmp/project", "--categories", "todo");
+        assertTrue(parseResult.hasSubcommand());
+    }
+
+    @Test
+    void parsesCategoriesOption_test_gap() {
+        var cmd = new CommandLine(new App());
+        var parseResult = cmd.parseArgs("improve", "--target-dir", "/tmp/project", "--categories", "test_gap");
+        assertTrue(parseResult.hasSubcommand());
+    }
+
+    @Test
+    void parsesCategoriesOption_security() {
+        var cmd = new CommandLine(new App());
+        var parseResult = cmd.parseArgs("improve", "--target-dir", "/tmp/project", "--categories", "security");
+        assertTrue(parseResult.hasSubcommand());
+    }
+
+    @Test
+    void parsesCategoriesOption_tech_debt() {
+        var cmd = new CommandLine(new App());
+        var parseResult = cmd.parseArgs("improve", "--target-dir", "/tmp/project", "--categories", "tech_debt");
+        assertTrue(parseResult.hasSubcommand());
+    }
+
+    @Test
+    void parsesCategoriesOption_error_handling() {
+        var cmd = new CommandLine(new App());
+        var parseResult = cmd.parseArgs("improve", "--target-dir", "/tmp/project", "--categories", "error_handling");
+        assertTrue(parseResult.hasSubcommand());
+    }
+
+    @Test
+    void parsesCategoriesOption_documentation() {
+        var cmd = new CommandLine(new App());
+        var parseResult = cmd.parseArgs("improve", "--target-dir", "/tmp/project", "--categories", "documentation");
         assertTrue(parseResult.hasSubcommand());
     }
 
